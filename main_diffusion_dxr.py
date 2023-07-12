@@ -116,7 +116,7 @@ class DXRLightningModule(LightningModule):
             norm_num_groups=16, 
             num_res_blocks=2,
             with_conditioning=True, 
-            cross_attention_dim=2,
+            cross_attention_dim=12, #flatR | flatT
         )
         
         self.ddpmsch = DDPMScheduler(
