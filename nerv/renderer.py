@@ -251,9 +251,9 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         clarity = self.clarity_net(image2d).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
 
         if resample_clarity:
-            z = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
-            y = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
-            x = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
+            z = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
+            y = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
+            x = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1) # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords) # world to ndc, 1 DHW 3
@@ -293,9 +293,9 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         volumes = torch.cat(volumes, dim=0)
         
         if resample_volumes:
-            z = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
-            y = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
-            x = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
+            z = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
+            y = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
+            x = torch.linspace(-1., 1., steps=self.vol_shape, device=_device)
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1) # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords) # world to ndc, 1 DHW 3
