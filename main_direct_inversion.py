@@ -144,10 +144,6 @@ class DXRLightningModule(LightningModule):
         azim_hidden = torch.zeros(self.batch_size, device=_device)
         view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=30, znear=4, zfar=8)
         
-        # Construct the context pose to diffusion model
-        pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1)], dim=-1)
-        pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1)], dim=-1)
-        
         # Construct the samples in 2D
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
@@ -155,21 +151,21 @@ class DXRLightningModule(LightningModule):
         
         # Reconstruct the Encoder-Decoder
         volume_dx_concat = self.forward_volume(
-            image2d=torch.cat([figure_ct_random, figure_ct_hidden, figure_xr_hidden]),
-            cameras=join_cameras_as_batch([view_random, view_hidden, view_hidden]),
+            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]),
+            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
             n_views=[1, 1, 1])
-        volume_ct_random, volume_ct_hidden, volume_xr_hidden = torch.split(volume_dx_concat, batchsz)
+        volume_xr_hidden, volume_ct_random, volume_ct_hidden = torch.split(volume_dx_concat, batchsz)
         
+        figure_xr_hidden_hidden = self.forward_screen(image3d=volume_xr_hidden, cameras=view_hidden)
         figure_ct_random_random = self.forward_screen(image3d=volume_ct_random, cameras=view_random)
         figure_ct_random_hidden = self.forward_screen(image3d=volume_ct_random, cameras=view_hidden)
         figure_ct_hidden_random = self.forward_screen(image3d=volume_ct_hidden, cameras=view_random)
         figure_ct_hidden_hidden = self.forward_screen(image3d=volume_ct_hidden, cameras=view_hidden)
-        figure_xr_hidden_hidden = self.forward_screen(image3d=volume_xr_hidden, cameras=view_hidden)
         
         if self.sh>0:
+            volume_xr_hidden = volume_xr_hidden.sum(dim=1, keepdim=True)
             volume_ct_random = volume_ct_random.sum(dim=1, keepdim=True)
             volume_ct_hidden = volume_ct_hidden.sum(dim=1, keepdim=True)
-            volume_xr_hidden = volume_xr_hidden.sum(dim=1, keepdim=True)
         
         im2d_loss_inv = self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
                       + self.l1loss(figure_ct_random_random, figure_ct_random) \
@@ -188,12 +184,12 @@ class DXRLightningModule(LightningModule):
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat([
                 torch.cat([
-                    image3d[..., self.vol_shape//2, :],
-                    figure_ct_random, 
-                    figure_ct_hidden, 
                     image2d, 
                     volume_xr_hidden[..., self.vol_shape//2, :],                   
                     figure_xr_hidden_hidden, 
+                    image3d[..., self.vol_shape//2, :],
+                    figure_ct_random, 
+                    figure_ct_hidden, 
                 ], dim=-2).transpose(2, 3),     
                 torch.cat([
                     volume_ct_random[..., self.vol_shape//2, :], 
