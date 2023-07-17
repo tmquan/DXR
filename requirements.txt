@@ -1,0 +1,10 @@
+diffusers==0.16.1
+generative==0.0.0
+lightning==2.0.2
+monai==1.2.0
+nerfstudio==0.2.2
+pytorch3d==0.7.4
+pytorch_lightning==1.9.4
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+tqdm==4.65.0
