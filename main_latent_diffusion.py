@@ -196,7 +196,9 @@ class DXRLightningModule(LightningModule):
                       + self.l1loss(figure_ct_random_hidden, figure_ct_hidden) \
                       + self.l1loss(figure_ct_hidden_random, figure_ct_random) \
                       + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) 
-        
+                
+        im3d_loss_inv = self.l1loss(volume_ct_random, image3d) \
+                      + self.l1loss(volume_ct_hidden, image3d) 
         # Create timesteps
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()
         
@@ -242,9 +244,7 @@ class DXRLightningModule(LightningModule):
         # Total loss
         im2d_loss = im2d_loss_inv + im2d_loss_dif
         self.log(f'{stage}_im2d_loss', im2d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        
-        im3d_loss = self.l1loss(volume_ct_random, image3d) \
-                  + self.l1loss(volume_ct_hidden, image3d)   
+        im3d_loss = im3d_loss_inv 
         self.log(f'{stage}_im3d_loss', im3d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
         
         # Visualization step 
