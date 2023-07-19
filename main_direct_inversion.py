@@ -20,6 +20,9 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.callbacks import StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
+
+from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+
 from argparse import ArgumentParser
 from tqdm.auto import tqdm
 
@@ -116,7 +119,8 @@ class DXRLightningModule(LightningModule):
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
-
+        self.msssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=[-1.0, 1.0])
+        
     def forward_screen(self, image3d, cameras):   
         return self.fwd_renderer(image3d * 0.5 + 0.5/image3d.shape[1], cameras) * 2.0 - 1.0
 
@@ -156,6 +160,7 @@ class DXRLightningModule(LightningModule):
             n_views=[1, 1, 1])
         volume_xr_hidden, volume_ct_random, volume_ct_hidden = torch.split(volume_dx_concat, batchsz)
         
+        figure_xr_hidden_random = self.forward_screen(image3d=volume_xr_hidden, cameras=view_random)
         figure_xr_hidden_hidden = self.forward_screen(image3d=volume_xr_hidden, cameras=view_hidden)
         figure_ct_random_random = self.forward_screen(image3d=volume_ct_random, cameras=view_random)
         figure_ct_random_hidden = self.forward_screen(image3d=volume_ct_random, cameras=view_hidden)
@@ -167,18 +172,20 @@ class DXRLightningModule(LightningModule):
             volume_ct_random = volume_ct_random.sum(dim=1, keepdim=True)
             volume_ct_hidden = volume_ct_hidden.sum(dim=1, keepdim=True)
         
-        im2d_loss_inv = self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
-                      + self.l1loss(figure_ct_random_random, figure_ct_random) \
+        im2d_loss_inv = self.l1loss(figure_ct_random_random, figure_ct_random) \
                       + self.l1loss(figure_ct_random_hidden, figure_ct_hidden) \
                       + self.l1loss(figure_ct_hidden_random, figure_ct_random) \
-                      + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) 
+                      + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) \
+                      + self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
+                      - self.msssim(figure_xr_hidden_random, figure_ct_random) + 1.0
+                       
         im2d_loss = im2d_loss_inv
         self.log(f'{stage}_im2d_loss', im2d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
         
         im3d_loss = self.l1loss(volume_ct_random, image3d) \
                   + self.l1loss(volume_ct_hidden, image3d)   
         self.log(f'{stage}_im3d_loss', im3d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        
+                         
         # Visualization step 
         if batch_idx==0:
             zeros = torch.zeros_like(image2d)
@@ -186,12 +193,14 @@ class DXRLightningModule(LightningModule):
                 torch.cat([
                     image2d, 
                     volume_xr_hidden[..., self.vol_shape//2, :],                   
+                    figure_xr_hidden_random, 
                     figure_xr_hidden_hidden, 
                     image3d[..., self.vol_shape//2, :],
                     figure_ct_random, 
                     figure_ct_hidden, 
                 ], dim=-2).transpose(2, 3),     
                 torch.cat([
+                    zeros,
                     volume_ct_random[..., self.vol_shape//2, :], 
                     figure_ct_random_random, 
                     figure_ct_random_hidden,

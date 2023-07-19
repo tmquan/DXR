@@ -219,8 +219,8 @@ class DXRLightningModule(LightningModule):
             ], dim=0),
             timesteps=timesteps, 
             context=torch.cat([
-                pose_random-pose_hidden, 
-                pose_hidden-pose_random
+                pose_random, 
+                pose_hidden
             ], dim=0)
         )
         
@@ -258,7 +258,7 @@ class DXRLightningModule(LightningModule):
                     model_output = self.unet2d_model(
                         torch.cat([figure_xr_random, figure_xr_hidden], dim=1),
                         timesteps=torch.Tensor((t,)).to(_device), 
-                        context=pose_random-pose_hidden, 
+                        context=pose_random, 
                     )
 
                     # 2. compute previous image: x_t -> x_t-1
@@ -278,8 +278,8 @@ class DXRLightningModule(LightningModule):
                 figure_xr_hidden_sample_hidden = self.forward_screen(image3d=volume_xr_hidden_sample, cameras=view_hidden)
                 
                 if self.sh>0:
-                    volume_dx_random_sample = volume_dx_random_sample.sum(dim=1, keepdim=True)
-                    volume_dx_hidden_sample = volume_dx_hidden_sample.sum(dim=1, keepdim=True)
+                    volume_xr_random_sample = volume_xr_random_sample.sum(dim=1, keepdim=True)
+                    volume_xr_hidden_sample = volume_xr_hidden_sample.sum(dim=1, keepdim=True)
                     
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat([
