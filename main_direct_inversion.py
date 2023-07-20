@@ -22,6 +22,7 @@ from lightning.pytorch.callbacks import StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from argparse import ArgumentParser
 from tqdm.auto import tqdm
@@ -119,7 +120,7 @@ class DXRLightningModule(LightningModule):
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
-        self.msssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=[-1.0, 1.0])
+        self.msssim = MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0)
         
     def forward_screen(self, image3d, cameras):   
         return self.fwd_renderer(image3d * 0.5 + 0.5/image3d.shape[1], cameras) * 2.0 - 1.0
@@ -177,7 +178,7 @@ class DXRLightningModule(LightningModule):
                       + self.l1loss(figure_ct_hidden_random, figure_ct_random) \
                       + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) \
                       + self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
-                      - self.msssim(figure_xr_hidden_random, figure_ct_random) + 1.0
+                      - self.msssim(figure_xr_hidden_random*0.5+0.5, figure_ct_random*0.5+0.5) + 1.0
                        
         im2d_loss = im2d_loss_inv
         self.log(f'{stage}_im2d_loss', im2d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
