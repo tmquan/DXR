@@ -111,6 +111,30 @@ class DXRLightningModule(LightningModule):
             backbone=self.backbone,
         )
         
+        self.unet2d_model = DiffusionModelUNet(
+            spatial_dims=2,
+            in_channels=1, # Condition with straight/hidden view
+            out_channels=1,
+            num_channels=backbones[self.backbone],
+            attention_levels=[False, False, False, True, True],
+            norm_num_groups=16, 
+            num_res_blocks=2,
+            with_conditioning=True, 
+            cross_attention_dim=12, #flatR | flatT
+        )
+        self.ddpmsch = DDPMScheduler(
+            num_train_timesteps=self.timesteps, 
+            schedule="scaled_linear_beta", 
+            prediction_type=hparams.prediction_type,
+            beta_start=0.0005, beta_end=0.0195)
+        self.ddimsch = DDIMScheduler(
+            num_train_timesteps=self.timesteps, 
+            schedule="scaled_linear_beta", 
+            prediction_type=hparams.prediction_type,
+            beta_start=0.0005, beta_end=0.0195, clip_sample=False)
+        self.ddimsch.set_timesteps(num_inference_steps=100)
+        self.inferer = DiffusionInferer(scheduler=self.ddpmsch)
+        
         if self.ckpt:
             checkpoint = torch.load(self.ckpt, map_location=torch.device('cpu'))["state_dict"]
             state_dict = {k: v for k, v in checkpoint.items() if k in self.state_dict()}
@@ -137,7 +161,8 @@ class DXRLightningModule(LightningModule):
         image2d = batch["image2d"] * 2.0 - 1.0
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
-            
+        self.lpips_ = self.lpips_.to(_device)
+        
         # Construct the random cameras, -1 and 1 are the same point in azimuths
         dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
@@ -154,45 +179,181 @@ class DXRLightningModule(LightningModule):
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
         figure_xr_hidden = image2d 
         
-        # Reconstruct the Encoder-Decoder
-        volume_dx_concat = self.forward_volume(
-            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]),
-            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
-            n_views=[1, 1, 1])
-        volume_xr_hidden, volume_ct_random, volume_ct_hidden = torch.split(volume_dx_concat, batchsz)
+        # Diffusion timesteps
+        timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()
         
-        figure_xr_hidden_random = self.forward_screen(image3d=volume_xr_hidden, cameras=view_random)
-        figure_xr_hidden_hidden = self.forward_screen(image3d=volume_xr_hidden, cameras=view_hidden)
-        figure_ct_random_random = self.forward_screen(image3d=volume_ct_random, cameras=view_random)
-        figure_ct_random_hidden = self.forward_screen(image3d=volume_ct_random, cameras=view_hidden)
-        figure_ct_hidden_random = self.forward_screen(image3d=volume_ct_hidden, cameras=view_random)
-        figure_ct_hidden_hidden = self.forward_screen(image3d=volume_ct_hidden, cameras=view_hidden)
+        # Construct the context pose to diffusion model
+        pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1)], dim=-1)
+        pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1)], dim=-1)    
+            
+        if batch_idx%2==0:
+            # Reconstruct the Encoder-Decoder
+            volume_dx_concat = self.forward_volume(
+                image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]),
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
+                n_views=[1, 1, 1])
+            volume_xr_hidden, volume_ct_random, volume_ct_hidden = torch.split(volume_dx_concat, batchsz)
+            
+            figure_xr_hidden_random = self.forward_screen(image3d=volume_xr_hidden, cameras=view_random)
+            figure_xr_hidden_hidden = self.forward_screen(image3d=volume_xr_hidden, cameras=view_hidden)
+            figure_ct_random_random = self.forward_screen(image3d=volume_ct_random, cameras=view_random)
+            figure_ct_random_hidden = self.forward_screen(image3d=volume_ct_random, cameras=view_hidden)
+            figure_ct_hidden_random = self.forward_screen(image3d=volume_ct_hidden, cameras=view_random)
+            figure_ct_hidden_hidden = self.forward_screen(image3d=volume_ct_hidden, cameras=view_hidden)
+            
+            if self.sh>0:
+                volume_xr_hidden = volume_xr_hidden.sum(dim=1, keepdim=True)
+                volume_ct_random = volume_ct_random.sum(dim=1, keepdim=True)
+                volume_ct_hidden = volume_ct_hidden.sum(dim=1, keepdim=True)
+            
+            im2d_loss_inv = self.l1loss(figure_ct_random_random, figure_ct_random) \
+                          + self.l1loss(figure_ct_random_hidden, figure_ct_hidden) \
+                          + self.l1loss(figure_ct_hidden_random, figure_ct_random) \
+                          + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) \
+                          + self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
+                            
+            if self.lpips:
+                im2d_loss_inv += self.lpips_(figure_xr_hidden_random.repeat(1, 3, 1, 1), figure_ct_random.repeat(1, 3, 1, 1)) 
+                        
+            im3d_loss_inv = self.l1loss(volume_ct_random, image3d) \
+                          + self.l1loss(volume_ct_hidden, image3d)  
+                        
+            im2d_loss = im2d_loss_inv
+            im3d_loss = im3d_loss_inv
+            
+        elif batch_idx%2==1:
+            # Diffusion step: 2 kinds of blending
+            volume_xr_latent = torch.randn_like(image3d)
+            figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
+            figure_xr_interp_hidden = self.ddpmsch.add_noise(
+                original_samples=figure_xr_hidden, 
+                noise=figure_xr_latent_hidden, 
+                timesteps=timesteps
+            )
+            
+            volume_ct_latent = torch.randn_like(image3d)
+            volume_ct_interp = self.ddpmsch.add_noise(
+                original_samples=image3d, 
+                noise=volume_ct_latent, 
+                timesteps=timesteps
+            )
+            figure_ct_interp_random = self.forward_screen(image3d=volume_ct_interp, cameras=view_random)
+            figure_ct_interp_hidden = self.forward_screen(image3d=volume_ct_interp, cameras=view_hidden)
+            
+            # if self.ddpmsch.prediction_type == "v_prediction":
+            #     figure_xr_target_random = self.ddpmsch.get_velocity(image2d, figure_xr_latent_random, timesteps)
+            #     figure_xr_target_hidden = self.ddpmsch.get_velocity(image2d, figure_xr_latent_hidden, timesteps)
+            #     volume_ct_target = self.ddpmsch.get_velocity(image3d, volume_ct_latent, timesteps)
+            #     figure_ct_target_random = self.ddpmsch.get_velocity(image2d, figure_ct_latent_random, timesteps)
+            #     figure_ct_target_hidden = self.ddpmsch.get_velocity(image2d, figure_ct_latent_hidden, timesteps)
+            # elif self.ddpmsch.prediction_type == "epsilon":
+            #     figure_xr_target_random = figure_xr_latent_random
+            #     figure_xr_target_hidden = figure_xr_latent_hidden
+            #     volume_ct_target = volume_ct_latent
+            #     figure_ct_target_random = figure_ct_latent_random
+            #     figure_ct_target_hidden = figure_ct_latent_hidden
+            # elif self.ddpmsch.prediction_type == "sample":
+            #     figure_xr_target_random = figure_xr_random
+            #     figure_xr_target_hidden = figure_xr_hidden
+            #     volume_ct_target = image3d
+            #     figure_ct_target_random = figure_ct_random
+            #     figure_ct_target_hidden = figure_ct_hidden
+            
+            # Run the backward diffusion (denoising + reproject)
+            figure_dx_output = self.unet2d_model(
+                x=torch.cat([
+                    figure_xr_interp_hidden,
+                    figure_ct_interp_random, 
+                    figure_ct_interp_hidden
+                ]), 
+                context=torch.cat([
+                    pose_hidden,
+                    pose_random, 
+                    pose_hidden
+                ]),
+                timesteps=timesteps
+            )
+            figure_xr_output_hidden,\
+            figure_ct_output_random,\
+            figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
+            
+            # Reconstruct the Encoder-Decoder
+            volume_dx_output = self.forward_volume(
+                image2d=torch.cat([figure_xr_output_hidden, figure_ct_output_random, figure_ct_output_hidden]),
+                cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
+                n_views=[1, 1, 1])
+            volume_xr_hidden_output,\
+            volume_ct_random_output,\
+            volume_ct_hidden_output = torch.split(volume_dx_output, batchsz)
+            
+            figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
+            figure_xr_hidden_output_hidden = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_hidden)
+            figure_ct_random_output_random = self.forward_screen(image3d=volume_ct_random_output, cameras=view_random)
+            figure_ct_random_output_hidden = self.forward_screen(image3d=volume_ct_random_output, cameras=view_hidden)
+            figure_ct_hidden_output_random = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_random)
+            figure_ct_hidden_output_hidden = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_hidden)
+            
+            if self.sh>0:
+                volume_xr_hidden_output = volume_xr_hidden_output.sum(dim=1, keepdim=True)
+                volume_ct_random_output = volume_ct_random_output.sum(dim=1, keepdim=True)
+                volume_ct_hidden_output = volume_ct_hidden_output.sum(dim=1, keepdim=True)
+            
+            im2d_loss_dif = self.l1loss(figure_ct_random_output_random, figure_ct_random) \
+                          + self.l1loss(figure_ct_random_output_hidden, figure_ct_hidden) \
+                          + self.l1loss(figure_ct_hidden_output_random, figure_ct_random) \
+                          + self.l1loss(figure_ct_hidden_output_hidden, figure_ct_hidden) \
+                          + self.l1loss(figure_xr_hidden_output_hidden, figure_xr_hidden) 
+                        
+            if self.lpips:
+                im2d_loss_dif += self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1), figure_ct_random.repeat(1, 3, 1, 1)) 
+                        
+            im3d_loss_dif = self.l1loss(volume_ct_random_output, image3d) \
+                          + self.l1loss(volume_ct_hidden_output, image3d)  
+
+            im2d_loss = im2d_loss_dif
+            im3d_loss = im3d_loss_dif
+                                        
+        #
         
-        if self.sh>0:
-            volume_xr_hidden = volume_xr_hidden.sum(dim=1, keepdim=True)
-            volume_ct_random = volume_ct_random.sum(dim=1, keepdim=True)
-            volume_ct_hidden = volume_ct_hidden.sum(dim=1, keepdim=True)
-        
-        im2d_loss_inv = self.l1loss(figure_ct_random_random, figure_ct_random) \
-                      + self.l1loss(figure_ct_random_hidden, figure_ct_hidden) \
-                      + self.l1loss(figure_ct_hidden_random, figure_ct_random) \
-                      + self.l1loss(figure_ct_hidden_hidden, figure_ct_hidden) \
-                      + self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden) \
-                          
-        if self.lpips:
-            im2d_loss_inv += self.lpips_(figure_xr_hidden_random.repeat(1,3,1,1), figure_ct_random.repeat(1,3,1,1)) 
-                       
-        im3d_loss_inv = self.l1loss(volume_ct_random, image3d) \
-                      + self.l1loss(volume_ct_hidden, image3d)  
-        
-        im2d_loss = im2d_loss_inv
         self.log(f'{stage}_im2d_loss', im2d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-        
-        im3d_loss = im3d_loss_inv 
         self.log(f'{stage}_im3d_loss', im3d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
                          
         # Visualization step 
         if batch_idx==0:
+            # Sampling step for X-ray
+            with torch.no_grad():
+                volume_xr_latent = torch.randn_like(image3d)
+                figure_xr_latent_random = self.forward_screen(image3d=volume_xr_latent, cameras=view_random)
+                figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
+                
+                figure_xr_sample_random = self.inferer.sample(
+                    input_noise=figure_xr_latent_random, 
+                    diffusion_model=self.unet2d_model, 
+                    conditioning=pose_random,
+                    scheduler=self.ddimsch, 
+                    verbose=False
+                )
+                figure_xr_sample_hidden = self.inferer.sample(
+                    input_noise=figure_xr_latent_hidden, 
+                    diffusion_model=self.unet2d_model, 
+                    conditioning=pose_hidden,
+                    scheduler=self.ddimsch, 
+                    verbose=False
+                )
+                                
+                volume_xr_sample = self.forward_volume(
+                    image2d=torch.cat([figure_xr_sample_random, figure_xr_sample_hidden]),
+                    cameras=join_cameras_as_batch([view_random, view_hidden]),
+                    n_views=[1, 1]
+                )
+                
+                volume_xr_sample_random,\
+                volume_xr_sample_hidden = torch.split(volume_xr_sample, batchsz)
+                figure_xr_sample_random_random = self.forward_screen(image3d=volume_xr_sample_random, cameras=view_random)
+                figure_xr_sample_random_hidden = self.forward_screen(image3d=volume_xr_sample_random, cameras=view_hidden)
+                figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
+                figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden)
+                    
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat([
                 torch.cat([
@@ -212,6 +373,15 @@ class DXRLightningModule(LightningModule):
                     volume_ct_hidden[..., self.vol_shape//2, :], 
                     figure_ct_hidden_random, 
                     figure_ct_hidden_hidden,
+                ], dim=-2).transpose(2, 3),     
+                torch.cat([
+                    zeros,
+                    volume_xr_sample_random[..., self.vol_shape//2, :], 
+                    figure_xr_sample_random_random, 
+                    figure_xr_sample_random_hidden,
+                    volume_xr_sample_hidden[..., self.vol_shape//2, :], 
+                    figure_xr_sample_hidden_random, 
+                    figure_xr_sample_hidden_hidden,
                 ], dim=-2).transpose(2, 3),                    
             ], dim=-2)
             tensorboard = self.logger.experiment
@@ -245,6 +415,7 @@ class DXRLightningModule(LightningModule):
         optimizer = torch.optim.AdamW(
             [
                 {'params': self.inv_renderer.parameters()},
+                {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
             ], lr=self.lr, betas=(0.9, 0.999))
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
         return [optimizer], [scheduler]
