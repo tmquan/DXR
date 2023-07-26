@@ -216,6 +216,7 @@ class DXRLightningModule(LightningModule):
                           + self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) \
             
             if self.lpips:
+                figure_xr_hidden_inverse_random = torch.nan_to_num(figure_xr_hidden_inverse_random, 0, 1, -1)
                 lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1), 
                                          figure_ct_random.repeat(1, 3, 1, 1)) 
                 self.log(f'{stage}_lpip_loss', lpips_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
@@ -229,7 +230,7 @@ class DXRLightningModule(LightningModule):
             
         elif batch_idx%2==1:
             # Diffusion step: 2 kinds of blending
-            volume_xr_latent = torch.randn_like(image3d)
+            volume_xr_latent = torch.randn_like(image3d).clamp(-1, 1)
             figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
             # figure_xr_latent_hidden = torch.randn_like(image2d)
             figure_xr_interp_hidden = self.ddpmsch.add_noise(
@@ -238,7 +239,7 @@ class DXRLightningModule(LightningModule):
                 timesteps=timesteps
             )
             
-            volume_ct_latent = torch.randn_like(image3d)
+            volume_ct_latent = torch.randn_like(image3d).clamp(-1, 1)
             volume_ct_interp = self.ddpmsch.add_noise(
                 original_samples=image3d, 
                 noise=volume_ct_latent, 
@@ -260,9 +261,8 @@ class DXRLightningModule(LightningModule):
                     pose_hidden
                 ]),
                 timesteps=timesteps
-            )
-            if self.ddimsch.clip_sample:
-                figure_dx_output = torch.clamp(figure_dx_output, -1, 1)
+            ).clamp(-1, 1)
+            
             figure_xr_output_hidden,\
             figure_ct_output_random,\
             figure_ct_output_hidden = torch.split(figure_dx_output, batchsz)
@@ -299,6 +299,7 @@ class DXRLightningModule(LightningModule):
                           + self.l1loss(figure_xr_output_hidden, figure_xr_hidden) 
                           
             if self.lpips:
+                figure_xr_hidden_output_random = torch.nan_to_num(figure_xr_hidden_output_random, 0, 1, -1)
                 lpips_loss = self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1), 
                                          figure_ct_random.repeat(1, 3, 1, 1)) 
                 self.log(f'{stage}_lpip_loss', lpips_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
@@ -495,7 +496,7 @@ if __name__ == "__main__":
         logger=[tensorboard_logger],
         callbacks=callbacks,
         accumulate_grad_batches=4,
-        strategy="auto", #hparams.strategy, #"auto", #"ddp_find_unused_parameters_true", 
+        strategy="ddp_find_unused_parameters_true", #hparams.strategy, #"auto", #"ddp_find_unused_parameters_true", 
         precision=16 if hparams.amp else 32,
         profiler="advanced"
     )
