@@ -317,7 +317,7 @@ class DXRLightningModule(LightningModule):
             im3d_loss_dif = self.l1loss(volume_ct_random_output, volume_ct_target) \
                           + self.l1loss(volume_ct_hidden_output, volume_ct_target) 
             
-            # figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
+            figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
             figure_xr_hidden_output_hidden = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_hidden)
             figure_ct_random_output_random = self.forward_screen(image3d=volume_ct_random_output, cameras=view_random)
             figure_ct_random_output_hidden = self.forward_screen(image3d=volume_ct_random_output, cameras=view_hidden)
