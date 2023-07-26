@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-torch.set_float32_matmul_precision('highest')
+torch.set_float32_matmul_precision('high')
 
 from typing import Optional, NamedTuple
 from lightning_fabric.utilities.seed import seed_everything
@@ -216,8 +216,8 @@ class DXRLightningModule(LightningModule):
             
             if self.lpips:
                 figure_xr_hidden_inverse_random = torch.nan_to_num(figure_xr_hidden_inverse_random, 0, 1, -1)
-                lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1), 
-                                         figure_ct_random.repeat(1, 3, 1, 1)) 
+                lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), 
+                                         figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1)) 
                 self.log(f'{stage}_lpip_loss', lpips_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
                 im2d_loss_inv += lpips_loss
                         
@@ -314,16 +314,16 @@ class DXRLightningModule(LightningModule):
                 volume_ct_random_output = volume_ct_random_output.sum(dim=1, keepdim=True)
                 volume_ct_hidden_output = volume_ct_hidden_output.sum(dim=1, keepdim=True)
             
-            figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
+            im3d_loss_dif = self.l1loss(volume_ct_random_output, volume_ct_target) \
+                          + self.l1loss(volume_ct_hidden_output, volume_ct_target) 
+            
+            # figure_xr_hidden_output_random = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_random)
             figure_xr_hidden_output_hidden = self.forward_screen(image3d=volume_xr_hidden_output, cameras=view_hidden)
             figure_ct_random_output_random = self.forward_screen(image3d=volume_ct_random_output, cameras=view_random)
             figure_ct_random_output_hidden = self.forward_screen(image3d=volume_ct_random_output, cameras=view_hidden)
             figure_ct_hidden_output_random = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_random)
-            figure_ct_hidden_output_hidden = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_hidden)
+            figure_ct_hidden_output_hidden = self.forward_screen(image3d=volume_ct_hidden_output, cameras=view_hidden)    
             
-            im3d_loss_dif = self.l1loss(volume_ct_random_output, volume_ct_target) \
-                          + self.l1loss(volume_ct_hidden_output, volume_ct_target) 
-
             im2d_loss_dif = self.l1loss(figure_xr_output_hidden, figure_xr_target_hidden) \
                           + self.l1loss(figure_ct_output_random, figure_ct_target_random) \
                           + self.l1loss(figure_ct_output_hidden, figure_ct_target_hidden) \
@@ -333,10 +333,10 @@ class DXRLightningModule(LightningModule):
                           + self.l1loss(figure_ct_hidden_output_random, figure_ct_target_random) \
                           + self.l1loss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) \
             
-            if self.lpips:
+            if self.lpips and self.ddpmsch.prediction_type == "sample":
                 figure_xr_hidden_output_random = torch.nan_to_num(figure_xr_hidden_output_random, 0, 1, -1)
-                lpips_loss = self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1), 
-                                         figure_ct_target_random.repeat(1, 3, 1, 1)) 
+                lpips_loss = self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1).clamp(-1, 1), 
+                                         figure_ct_target_random.repeat(1, 3, 1, 1).clamp(-1, 1)) 
                 self.log(f'{stage}_lpip_loss', lpips_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
                 im2d_loss_dif += lpips_loss
                 
