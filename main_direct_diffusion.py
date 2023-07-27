@@ -512,7 +512,7 @@ if __name__ == "__main__":
         logger=[tensorboard_logger],
         callbacks=callbacks,
         accumulate_grad_batches=4,
-        strategy="ddp_find_unused_parameters_true", #hparams.strategy, #"auto", #"ddp_find_unused_parameters_true", 
+        strategy="auto", #hparams.strategy, #"auto", #"ddp_find_unused_parameters_true", 
         precision=16 if hparams.amp else 32,
         profiler="advanced"
     )
