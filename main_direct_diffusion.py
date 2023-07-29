@@ -403,11 +403,11 @@ class DXRLightningModule(LightningModule):
         
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            # [
-            #     {'params': self.inv_renderer.parameters()},
-            #     {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
-            # ], lr=self.lr, betas=(0.9, 0.999)
-            self.parameters(), lr=self.lr, betas=(0.9, 0.999)
+            [
+                {'params': self.inv_renderer.parameters()},
+                {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
+            ], lr=self.lr, betas=(0.9, 0.999)
+            # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
         return [optimizer], [scheduler]
