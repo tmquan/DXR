@@ -147,8 +147,7 @@ class DXRLightningModule(LightningModule):
         figure_xr_hidden = image2d 
         
         # Reconstruct the Encoder-Decoder
-        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden)               
-        
+        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden)
         im3d_loss_inv = self.l1loss(volume_ct_hidden, image3d)  
         im3d_loss = im3d_loss_inv 
         self.log(f'{stage}_im3d_loss', im3d_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
