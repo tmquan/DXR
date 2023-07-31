@@ -154,10 +154,13 @@ class DXRLightningModule(LightningModule):
                          
         # Visualization step 
         if batch_idx==0:
+            with torch.no_grad():
+                volume_xr_hidden = self.forward_volume(image2d=figure_xr_hidden)
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat([
                 torch.cat([
                     image2d, 
+                    volume_xr_hidden[..., self.vol_shape//2, :],
                     image3d[..., self.vol_shape//2, :],
                     figure_ct_hidden, 
                     volume_ct_hidden[..., self.vol_shape//2, :],

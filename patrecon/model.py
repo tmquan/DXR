@@ -183,7 +183,7 @@ class ReconNet(nn.Module):
 		self.output_layer = _make_layers(64,	out_channels, 'conv1_s1', False)
 		
 		# network initialization
-		_initialize_weights(self)
+		# _initialize_weights(self) # use default pytorch
 
 
 	def forward(self, x, out_feature=False):
