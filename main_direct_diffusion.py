@@ -292,12 +292,16 @@ class DXRLightningModule(LightningModule):
             volume_ct_target = self.ddpmsch.get_velocity(image3d, volume_ct_latent, timesteps)
     
         
-        im2d_loss_dif = self.l1loss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
-                      + self.l1loss(figure_ct_hidden_output_random, figure_ct_target_random) \
-                      + self.l1loss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) \
-                      + self.l1loss(figure_xr_output_hidden, figure_xr_target_hidden) \
+        
+        # im2d_loss_cyc = self.l1loss(figure_xr_hidden_output_hidden, figure_xr_target_hidden) \
+        #               + self.l1loss(figure_ct_hidden_output_random, figure_ct_target_random) \
+        #               + self.l1loss(figure_ct_hidden_output_hidden, figure_ct_target_hidden) 
+        figure_xr_output_hidden = (figure_xr_output_hidden + figure_xr_hidden_output_hidden) / 2.0
+        figure_ct_output_random = (figure_ct_output_random + figure_ct_hidden_output_random) / 2.0
+        figure_ct_output_hidden = (figure_ct_output_hidden + figure_ct_hidden_output_hidden) / 2.0
+        im2d_loss_dif = self.l1loss(figure_xr_output_hidden, figure_xr_target_hidden) \
                       + self.l1loss(figure_ct_output_random, figure_ct_target_random) \
-                      + self.l1loss(figure_ct_output_hidden, figure_ct_target_hidden) \
+                      + self.l1loss(figure_ct_output_hidden, figure_ct_target_hidden) 
 
         if self.lpips:
             figure_xr_hidden_output_random = torch.nan_to_num(figure_xr_hidden_output_random, 0, 1, -1)
