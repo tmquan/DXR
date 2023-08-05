@@ -333,26 +333,26 @@ class DXRLightningModule(LightningModule):
         # Visualization step 
         if batch_idx==0:
             # Sampling step for X-ray
-            with torch.no_grad():
-                volume_xr_latent = torch.randn_like(image3d)
-                figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
+            # with torch.no_grad():
+            #     volume_xr_latent = torch.randn_like(image3d)
+            #     figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
                 
-                figure_xr_sample_hidden = self.inferer.sample(
-                    input_noise=figure_xr_latent_hidden, 
-                    diffusion_model=self.unet2d_model, 
-                    conditioning=pose_hidden,
-                    scheduler=self.ddimsch, 
-                    verbose=False
-                )
+            #     figure_xr_sample_hidden = self.inferer.sample(
+            #         input_noise=figure_xr_latent_hidden, 
+            #         diffusion_model=self.unet2d_model, 
+            #         conditioning=pose_hidden,
+            #         scheduler=self.ddimsch, 
+            #         verbose=False
+            #     )
                                 
-                volume_xr_sample_hidden = self.forward_volume(
-                    image2d=figure_xr_sample_hidden,
-                    cameras=view_hidden,
-                    n_views=[1]
-                )
+            #     volume_xr_sample_hidden = self.forward_volume(
+            #         image2d=figure_xr_sample_hidden,
+            #         cameras=view_hidden,
+            #         n_views=[1]
+            #     )
                 
-                figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
-                figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden)
+            #     figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
+            #     figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden)
                     
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat([
@@ -367,9 +367,9 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2).transpose(2, 3),     
                 torch.cat([
                     zeros,
-                    volume_xr_sample_hidden[..., self.vol_shape//2, :], 
-                    figure_xr_sample_hidden_random, 
-                    figure_xr_sample_hidden_hidden,
+                    zeros, 
+                    zeros, 
+                    zeros,
                     volume_ct_hidden_inverse[..., self.vol_shape//2, :], 
                     figure_ct_hidden_inverse_random, 
                     figure_ct_hidden_inverse_hidden,
@@ -406,7 +406,7 @@ class DXRLightningModule(LightningModule):
         optimizer = torch.optim.AdamW(
             [
                 {'params': self.inv_renderer.parameters()},
-                {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
+                # {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
             ], lr=self.lr, betas=(0.9, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
