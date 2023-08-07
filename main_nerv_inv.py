@@ -188,7 +188,7 @@ class DXRLightningModule(LightningModule):
         volume_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]),
             cameras=join_cameras_as_batch([view_hidden, view_hidden]),
-            n_views=[1, 1])
+            n_views=[1, 1]*batchsz)
         volume_xr_hidden_inverse,\
         volume_ct_hidden_inverse = torch.split(volume_dx_inverse, batchsz)
         
@@ -348,7 +348,7 @@ class DXRLightningModule(LightningModule):
                 volume_xr_sample_hidden = self.forward_volume(
                     image2d=figure_xr_sample_hidden,
                     cameras=view_hidden,
-                    n_views=[1]
+                    n_views=[1]*batchsz
                 )
                 
                 figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
