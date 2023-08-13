@@ -210,7 +210,7 @@ class DXRLightningModule(LightningModule):
             lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), 
                                      figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1)) 
             self.log(f'{stage}_lpip_loss', lpips_loss, on_step=(stage=='train'), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size)
-            im2d_loss_inv += lpips_loss
+            im2d_loss_inv += lpips_loss * self.omega
                     
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d)  
         
@@ -314,7 +314,7 @@ class DXRLightningModule(LightningModule):
             figure_xr_hidden_output_random = torch.nan_to_num(figure_xr_hidden_output_random, 0, 1, -1)
             lpips_loss = self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1).clamp(-1, 1), 
                                      figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1)) 
-            im2d_loss_dif += lpips_loss * 2
+            im2d_loss_dif += lpips_loss * self.omega * 2
             
         im3d_loss_dif = self.l1loss(volume_ct_hidden_output, volume_ct_target) * 2
             
