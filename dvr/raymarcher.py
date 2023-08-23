@@ -37,10 +37,10 @@ class EmissionAbsorptionFrontToBackRaymarcher(EmissionAbsorptionRaymarcher):
         # opacities = 1.0 - torch.prod(1.0 - rays_densities, dim=-1, keepdim=True)
         absorption = _shifted_cumprod(
             (1.0 + eps) - rays_densities.flip(dims=(-1,)), shift=-self.surface_thickness
-        ).flip(dims=(-1,))  # Reverse the direction of the absorption to match X-ray detector
+        ).flip(
+            dims=(-1,)
+        )  # Reverse the direction of the absorption to match X-ray detector
         weights = rays_densities * absorption
         features = (weights[..., None] * rays_features).sum(dim=-2)
-        opacities = 1.0 - \
-            torch.prod(1.0 - rays_densities, dim=-1, keepdim=True)
+        opacities = 1.0 - torch.prod(1.0 - rays_densities, dim=-1, keepdim=True)
         return torch.cat((features, opacities), dim=-1)
-
