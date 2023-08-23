@@ -173,9 +173,7 @@ class DXRLightningModule(LightningModule):
         z = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
         y = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
         x = torch.linspace(-1, 1, steps=self.vol_shape, device=_device)
-        coords = (
-            torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)
-        )  # 1 DHW 3 to B DHW 3
+        coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
 
         # Process (resample) the clarity from ray views to ndc
         gpoints = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
@@ -278,10 +276,7 @@ class DXRLightningModule(LightningModule):
         )
 
         im2d_loss = (
-            self.l1loss(figure_ct_target, figure_ct_output)
-            + self.l1loss(figure_xr_target, figure_xr_output)
-            + self.l1loss(figure_ct_approx, figure_ct_random)
-            + self.l1loss(figure_xr_approx, image2d)
+            self.l1loss(figure_ct_target, figure_ct_output) + self.l1loss(figure_xr_target, figure_xr_output) + self.l1loss(figure_ct_approx, figure_ct_random) + self.l1loss(figure_xr_approx, image2d)
         )
 
         self.log(
@@ -344,13 +339,7 @@ class DXRLightningModule(LightningModule):
                     dim=-2,
                 )
                 tensorboard = self.logger.experiment
-                grid2d = (
-                    torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(
-                        -1.0, 1.0
-                    )
-                    * 0.5
-                    + 0.5
-                )
+                grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
                 tensorboard.add_image(
                     f"{stage}_df_samples",
                     grid2d,
@@ -617,9 +606,7 @@ if __name__ == "__main__":
         train_dataloaders=datamodule.train_dataloader(),
         val_dataloaders=datamodule.val_dataloader(),
         # datamodule=datamodule,
-        ckpt_path=hparams.ckpt
-        if hparams.ckpt is not None and hparams.strict
-        else None,  # "some/path/to/my_checkpoint.ckpt"
+        ckpt_path=hparams.ckpt if hparams.ckpt is not None and hparams.strict else None,  # "some/path/to/my_checkpoint.ckpt"
     )
 
     # test

@@ -255,9 +255,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             z = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
             y = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
             x = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
-            coords = (
-                torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)
-            )  # 1 DHW 3 to B DHW 3
+            coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
             values = F.grid_sample(
@@ -302,9 +300,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         else:
             density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
             mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
-            shcoeff = self.refiner_net(
-                torch.cat([clarity, density, mixture], dim=1)
-            )  # shcoeff = torch.add(shcoeff, clarity)
+            shcoeff = self.refiner_net(torch.cat([clarity, density, mixture], dim=1))  # shcoeff = torch.add(shcoeff, clarity)
         if self.sh > 0:
             shcomps = torch.einsum("abcde,bcde->abcde", shcoeff, self.shbasis)
         else:
@@ -320,9 +316,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             z = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
             y = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
             x = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
-            coords = (
-                torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)
-            )  # 1 DHW 3 to B DHW 3
+            coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
             values = F.grid_sample(

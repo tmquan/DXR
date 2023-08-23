@@ -253,13 +253,7 @@ class DXRLightningModule(LightningModule):
                 dim=-2,
             )
             tensorboard = self.logger.experiment
-            grid2d = (
-                torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(
-                    -1.0, 1.0
-                )
-                * 0.5
-                + 0.5
-            )
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
             tensorboard.add_image(
                 f"{stage}_df_samples",
                 grid2d,
@@ -535,9 +529,7 @@ if __name__ == "__main__":
         train_dataloaders=datamodule.train_dataloader(),
         val_dataloaders=datamodule.val_dataloader(),
         # datamodule=datamodule,
-        ckpt_path=hparams.ckpt
-        if hparams.ckpt is not None and hparams.strict
-        else None,  # "some/path/to/my_checkpoint.ckpt"
+        ckpt_path=hparams.ckpt if hparams.ckpt is not None and hparams.strict else None,  # "some/path/to/my_checkpoint.ckpt"
     )
 
     # test

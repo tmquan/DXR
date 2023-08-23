@@ -257,9 +257,7 @@ class DXRLightningModule(LightningModule):
         volume_xr_latent = torch.randn_like(image3d)
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
         # figure_xr_latent_hidden = torch.randn_like(image2d)
-        figure_xr_interp_hidden = self.ddpmsch.add_noise(
-            original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps
-        )
+        figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps)
 
         volume_ct_latent = torch.randn_like(image3d)
         figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
@@ -401,12 +399,8 @@ class DXRLightningModule(LightningModule):
                     n_views=[1] * batchsz,
                 )
 
-                figure_xr_sample_hidden_random = self.forward_screen(
-                    image3d=volume_xr_sample_hidden, cameras=view_random
-                )
-                figure_xr_sample_hidden_hidden = self.forward_screen(
-                    image3d=volume_xr_sample_hidden, cameras=view_hidden
-                )
+                figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
+                figure_xr_sample_hidden_hidden = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_hidden)
 
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat(
@@ -439,13 +433,7 @@ class DXRLightningModule(LightningModule):
                 dim=-2,
             )
             tensorboard = self.logger.experiment
-            grid2d = (
-                torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(
-                    -1.0, 1.0
-                )
-                * 0.5
-                + 0.5
-            )
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
             tensorboard.add_image(
                 f"{stage}_df_samples",
                 grid2d,
@@ -592,26 +580,11 @@ if __name__ == "__main__":
     # Create data module
     train_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join( hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join( hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join( hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join( hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join( hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
@@ -712,9 +685,7 @@ if __name__ == "__main__":
         train_dataloaders=datamodule.train_dataloader(),
         val_dataloaders=datamodule.val_dataloader(),
         # datamodule=datamodule,
-        ckpt_path=hparams.ckpt
-        if hparams.ckpt is not None and hparams.resume
-        else None,  # "some/path/to/my_checkpoint.ckpt"
+        ckpt_path=hparams.ckpt if hparams.ckpt is not None and hparams.resume else None,  # "some/path/to/my_checkpoint.ckpt"
     )
 
     # test
