@@ -159,8 +159,8 @@ class DXRLightningModule(LightningModule):
         image2d,
         cameras,
         n_views=[2, 1],
-        resample_clarity=True,
-        resample_volumes=False,
+        resample_clarity=False,
+        resample_volumes=True,
     ):
         return self.inv_renderer(
             image2d,
