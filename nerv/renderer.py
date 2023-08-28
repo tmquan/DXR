@@ -72,12 +72,7 @@ def inverse_look_at_view_transform(R, T, degrees=True):
 
 
 def make_cameras_dea(
-    dist: torch.Tensor,
-    elev: torch.Tensor,
-    azim: torch.Tensor,
-    fov: int = 10,
-    znear: int = 18.0,
-    zfar: int = 22.0,
+    dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor, fov: int = 10, znear: int = 18.0, zfar: int = 22.0,
 ):
     assert dist.device == elev.device == azim.device
     _device = dist.device
@@ -97,14 +92,7 @@ class NeRVFrontToBackFrustumFeaturer(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, backbone="efficientnet-b7") -> None:
         super().__init__()
         assert backbone in backbones.keys()
-        self.model = EfficientNetBN(
-            model_name=backbone,  # (24, 32, 56, 160, 448)
-            spatial_dims=2,
-            in_channels=in_channels,
-            num_classes=out_channels,
-            pretrained=True,
-            adv_prop=True,
-        )
+        self.model = EfficientNetBN(model_name=backbone, spatial_dims=2, in_channels=in_channels, num_classes=out_channels, pretrained=True, adv_prop=True,)  # (24, 32, 56, 160, 448)
 
     def forward(self, figures):
         camfeat = self.model.forward(figures)
@@ -112,17 +100,7 @@ class NeRVFrontToBackFrustumFeaturer(nn.Module):
 
 
 class NeRVFrontToBackInverseRenderer(nn.Module):
-    def __init__(
-        self,
-        in_channels=1,
-        out_channels=1,
-        img_shape=400,
-        vol_shape=256,
-        n_pts_per_ray=256,
-        sh=0,
-        pe=8,
-        backbone="efficientnet-b7",
-    ) -> None:
+    def __init__(self, in_channels=1, out_channels=1, img_shape=400, vol_shape=256, n_pts_per_ray=256, sh=0, pe=8, backbone="efficientnet-b7",) -> None:
         super().__init__()
         self.sh = sh
         self.pe = pe
@@ -142,12 +120,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             num_frequencies = self.pe
             min_freq_exp = 0
             max_freq_exp = 8
-            encoder = encodings.NeRFEncoding(
-                in_dim=self.pe,
-                num_frequencies=num_frequencies,
-                min_freq_exp=min_freq_exp,
-                max_freq_exp=max_freq_exp,
-            )
+            encoder = encodings.NeRFEncoding(in_dim=self.pe, num_frequencies=num_frequencies, min_freq_exp=min_freq_exp, max_freq_exp=max_freq_exp,)
             pebasis = encoder(zyx.view(-1, 3))
             pebasis = pebasis.view(self.vol_shape, self.vol_shape, self.vol_shape, -1).permute(3, 0, 1, 2)
             self.register_buffer("pebasis", pebasis)
@@ -161,7 +134,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             zyx = torch.stack([z, y, x], dim=-1)  # torch.Size([100, 100, 100, 3])
 
             encoder = encodings.SHEncoding(self.sh)
-            assert out_channels == self.sh**2 if self.sh > 0 else 1
+            assert out_channels == self.sh ** 2 if self.sh > 0 else 1
             shbasis = encoder(zyx.view(-1, 3))
             shbasis = shbasis.view(self.vol_shape, self.vol_shape, self.vol_shape, -1).permute(3, 0, 1, 2)
             self.register_buffer("shbasis", shbasis)
@@ -230,21 +203,10 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             ),
         )
 
-        self.raysampler = NDCMultinomialRaysampler(
-            image_width=self.img_shape,
-            image_height=self.img_shape,
-            n_pts_per_ray=self.n_pts_per_ray,
-            min_depth=8.0,
-            max_depth=4.0,
-        )
+        self.raysampler = NDCMultinomialRaysampler(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=8.0, max_depth=4.0,)
 
     def forward(
-        self,
-        image2d,
-        cameras,
-        n_views=[2, 1],
-        resample_clarity=True,
-        resample_volumes=False,
+        self, image2d, cameras, n_views=[2, 1], resample_clarity=True, resample_volumes=False,
     ):
         _device = image2d.device
         B = image2d.shape[0]
@@ -258,13 +220,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
-            values = F.grid_sample(
-                clarity,
-                points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3),
-                mode="bilinear",
-                padding_mode="zeros",
-                align_corners=False,
-            )
+            values = F.grid_sample(clarity, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
 
             scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
             interp = []
@@ -276,27 +232,8 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
 
         if self.pe > 0:
             density = self.density_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity], dim=1))
-            mixture = self.mixture_net(
-                torch.cat(
-                    [
-                        self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1),
-                        clarity,
-                        density,
-                    ],
-                    dim=1,
-                )
-            )
-            shcoeff = self.refiner_net(
-                torch.cat(
-                    [
-                        self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1),
-                        clarity,
-                        density,
-                        mixture,
-                    ],
-                    dim=1,
-                )
-            )
+            mixture = self.mixture_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity, density,], dim=1,))
+            shcoeff = self.refiner_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity, density, mixture,], dim=1,))
         else:
             density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
             mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
@@ -319,13 +256,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
             # Process (resample) the clarity from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
-            values = F.grid_sample(
-                volumes,
-                points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3),
-                mode="bilinear",
-                padding_mode="zeros",
-                align_corners=False,
-            )
+            values = F.grid_sample(volumes, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
 
             scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
             interp = []

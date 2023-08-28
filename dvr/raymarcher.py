@@ -11,20 +11,9 @@ class EmissionAbsorptionFrontToBackRaymarcher(EmissionAbsorptionRaymarcher):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def forward(
-        self,
-        rays_densities: torch.Tensor,
-        rays_features: torch.Tensor,
-        eps: float = 1e-10,
-        **kwargs,
-    ) -> torch.Tensor:
+    def forward(self, rays_densities: torch.Tensor, rays_features: torch.Tensor, eps: float = 1e-10, **kwargs,) -> torch.Tensor:
         _check_raymarcher_inputs(
-            rays_densities,
-            rays_features,
-            None,
-            z_can_be_none=True,
-            features_can_be_none=False,
-            density_1d=True,
+            rays_densities, rays_features, None, z_can_be_none=True, features_can_be_none=False, density_1d=True,
         )
         _check_density_bounds(rays_densities)
         rays_densities = rays_densities[..., 0]

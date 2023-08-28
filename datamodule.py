@@ -33,14 +33,7 @@ from pytorch_lightning import LightningDataModule
 
 
 class UnpairedDataset(CacheDataset, Randomizable):
-    def __init__(
-        self,
-        keys: Sequence,
-        data: Sequence,
-        transform: Optional[Callable] = None,
-        length: Optional[Callable] = None,
-        batch_size: int = 32,
-    ) -> None:
+    def __init__(self, keys: Sequence, data: Sequence, transform: Optional[Callable] = None, length: Optional[Callable] = None, batch_size: int = 32,) -> None:
         self.keys = keys
         self.data = data
         self.length = length
@@ -125,15 +118,8 @@ class UnpairedDataModule(LightningDataModule):
         self.train_transforms = Compose(
             [
                 LoadImaged(keys=["image3d", "image2d"]),
-                AddChanneld(
-                    keys=["image3d", "image2d"],
-                ),
-                Spacingd(
-                    keys=["image3d"],
-                    pixdim=(1.0, 1.0, 1.0),
-                    mode=["bilinear"],
-                    align_corners=True,
-                ),
+                AddChanneld(keys=["image3d", "image2d"],),
+                Spacingd(keys=["image3d"], pixdim=(1.0, 1.0, 1.0), mode=["bilinear"], align_corners=True,),
                 # Rotate90d(keys=["image2d"], k=3),
                 # RandFlipd(keys=["image2d"], prob=1.0, spatial_axis=1),
                 OneOf(
@@ -149,16 +135,8 @@ class UnpairedDataModule(LightningDataModule):
                         # Orientationd(keys=["image3d"], axcodes="RPI"),
                     ],
                 ),
-                ScaleIntensityd(
-                    keys=["image2d"],
-                    minv=0.0,
-                    maxv=1.0,
-                ),
-                HistogramNormalized(
-                    keys=["image2d"],
-                    min=0.0,
-                    max=1.0,
-                ),
+                ScaleIntensityd(keys=["image2d"], minv=0.0, maxv=1.0,),
+                HistogramNormalized(keys=["image2d"], min=0.0, max=1.0,),
                 OneOf(
                     [
                         # ScaleIntensityRanged(keys=["image3d"], clip=True,  # CTXR range
@@ -166,53 +144,14 @@ class UnpairedDataModule(LightningDataModule):
                         #         a_max=1500,
                         #         b_min=0.0,
                         #         b_max=1.0),
-                        ScaleIntensityRanged(
-                            keys=["image3d"],
-                            clip=True,  # Full range
-                            a_min=-500,  # -200,
-                            a_max=3071,  # 1500,
-                            b_min=0.0,
-                            b_max=1.0,
-                        ),
+                        ScaleIntensityRanged(keys=["image3d"], clip=True, a_min=-500, a_max=3071, b_min=0.0, b_max=1.0,),  # Full range  # -200,  # 1500,
                     ]
                 ),
-                RandRotated(
-                    keys=["image3d"],
-                    prob=1.0,
-                    range_x=0.1,
-                    padding_mode="zeros",
-                    mode=["bilinear"],
-                    align_corners=True,
-                ),
-                RandZoomd(
-                    keys=["image3d"],
-                    prob=1.0,
-                    min_zoom=0.85,
-                    max_zoom=1.10,
-                    padding_mode="constant",
-                    mode=["trilinear"],
-                    align_corners=True,
-                ),
-                RandZoomd(
-                    keys=["image2d"],
-                    prob=1.0,
-                    min_zoom=0.85,
-                    max_zoom=1.10,
-                    padding_mode="constant",
-                    mode=["area"],
-                ),
-                CropForegroundd(
-                    keys=["image3d"],
-                    source_key="image3d",
-                    select_fn=(lambda x: x > 0),
-                    margin=0,
-                ),
-                CropForegroundd(
-                    keys=["image2d"],
-                    source_key="image2d",
-                    select_fn=(lambda x: x > 0),
-                    margin=0,
-                ),
+                RandRotated(keys=["image3d"], prob=1.0, range_x=0.1, padding_mode="zeros", mode=["bilinear"], align_corners=True,),
+                RandZoomd(keys=["image3d"], prob=1.0, min_zoom=0.85, max_zoom=1.10, padding_mode="constant", mode=["trilinear"], align_corners=True,),
+                RandZoomd(keys=["image2d"], prob=1.0, min_zoom=0.85, max_zoom=1.10, padding_mode="constant", mode=["area"],),
+                CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=(lambda x: x > 0), margin=0,),
+                CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=(lambda x: x > 0), margin=0,),
                 # RandZoomd(keys=["image3d"], prob=1.0, min_zoom=0.9, max_zoom=1.0, padding_mode='constant', mode=["trilinear"], align_corners=True),
                 # RandZoomd(keys=["image2d"], prob=1.0, min_zoom=0.9, max_zoom=1.0, padding_mode='constant', mode=["area"]),
                 # RandFlipd(keys=["image3d"], prob=0.5, spatial_axis=0),
@@ -226,67 +165,27 @@ class UnpairedDataModule(LightningDataModule):
                 # CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=lambda x: x>0, margin=0),
                 # CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=lambda x: x>0, margin=0),
                 Zoomd(keys=["image3d"], zoom=0.9, padding_mode="constant", mode=["area"]),
-                Resized(
-                    keys=["image3d"],
-                    spatial_size=self.vol_shape,
-                    size_mode="longest",
-                    mode=["trilinear"],
-                    align_corners=True,
-                ),
-                Resized(
-                    keys=["image2d"],
-                    spatial_size=self.img_shape,
-                    size_mode="longest",
-                    mode=["area"],
-                ),
-                DivisiblePadd(
-                    keys=["image3d"],
-                    k=self.vol_shape,
-                    mode="constant",
-                    constant_values=0,
-                ),
-                DivisiblePadd(
-                    keys=["image2d"],
-                    k=self.img_shape,
-                    mode="constant",
-                    constant_values=0,
-                ),
-                ToTensord(
-                    keys=["image3d", "image2d"],
-                ),
+                Resized(keys=["image3d"], spatial_size=self.vol_shape, size_mode="longest", mode=["trilinear"], align_corners=True,),
+                Resized(keys=["image2d"], spatial_size=self.img_shape, size_mode="longest", mode=["area"],),
+                DivisiblePadd(keys=["image3d"], k=self.vol_shape, mode="constant", constant_values=0,),
+                DivisiblePadd(keys=["image2d"], k=self.img_shape, mode="constant", constant_values=0,),
+                ToTensord(keys=["image3d", "image2d"],),
             ]
         )
 
         self.train_datasets = UnpairedDataset(
-            keys=["image3d", "image2d"],
-            data=[self.train_image3d_files, self.train_image2d_files],
-            transform=self.train_transforms,
-            length=self.train_samples,
-            batch_size=self.batch_size,
+            keys=["image3d", "image2d"], data=[self.train_image3d_files, self.train_image2d_files], transform=self.train_transforms, length=self.train_samples, batch_size=self.batch_size,
         )
 
-        self.train_loader = DataLoader(
-            self.train_datasets,
-            batch_size=self.batch_size,
-            num_workers=48,
-            collate_fn=list_data_collate,
-            shuffle=True,
-        )
+        self.train_loader = DataLoader(self.train_datasets, batch_size=self.batch_size, num_workers=48, collate_fn=list_data_collate, shuffle=True,)
         return self.train_loader
 
     def val_dataloader(self):
         self.val_transforms = Compose(
             [
                 LoadImaged(keys=["image3d", "image2d"]),
-                AddChanneld(
-                    keys=["image3d", "image2d"],
-                ),
-                Spacingd(
-                    keys=["image3d"],
-                    pixdim=(1.0, 1.0, 1.0),
-                    mode=["bilinear"],
-                    align_corners=True,
-                ),
+                AddChanneld(keys=["image3d", "image2d"],),
+                Spacingd(keys=["image3d"], pixdim=(1.0, 1.0, 1.0), mode=["bilinear"], align_corners=True,),
                 # Rotate90d(keys=["image2d"], k=3),
                 # RandFlipd(keys=["image2d"], prob=1.0, spatial_axis=1), #Right cardio
                 OneOf(
@@ -302,16 +201,8 @@ class UnpairedDataModule(LightningDataModule):
                         # Orientationd(keys=["image3d"], axcodes="RPI"),
                     ],
                 ),
-                ScaleIntensityd(
-                    keys=["image2d"],
-                    minv=0.0,
-                    maxv=1.0,
-                ),
-                HistogramNormalized(
-                    keys=["image2d"],
-                    min=0.0,
-                    max=1.0,
-                ),
+                ScaleIntensityd(keys=["image2d"], minv=0.0, maxv=1.0,),
+                HistogramNormalized(keys=["image2d"], min=0.0, max=1.0,),
                 OneOf(
                     [
                         # ScaleIntensityRanged(keys=["image3d"], clip=True,  # CTXR range
@@ -319,75 +210,25 @@ class UnpairedDataModule(LightningDataModule):
                         #         a_max=1500,
                         #         b_min=0.0,
                         #         b_max=1.0),
-                        ScaleIntensityRanged(
-                            keys=["image3d"],
-                            clip=True,  # Full range
-                            a_min=-500,  # -200,
-                            a_max=3071,  # 1500,
-                            b_min=0.0,
-                            b_max=1.0,
-                        ),
+                        ScaleIntensityRanged(keys=["image3d"], clip=True, a_min=-500, a_max=3071, b_min=0.0, b_max=1.0,),  # Full range  # -200,  # 1500,
                     ]
                 ),
-                CropForegroundd(
-                    keys=["image3d"],
-                    source_key="image3d",
-                    select_fn=(lambda x: x > 0),
-                    margin=0,
-                ),
-                CropForegroundd(
-                    keys=["image2d"],
-                    source_key="image2d",
-                    select_fn=(lambda x: x > 0),
-                    margin=0,
-                ),
+                CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=(lambda x: x > 0), margin=0,),
+                CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=(lambda x: x > 0), margin=0,),
                 Zoomd(keys=["image3d"], zoom=0.9, padding_mode="constant", mode=["area"]),
-                Resized(
-                    keys=["image3d"],
-                    spatial_size=self.vol_shape,
-                    size_mode="longest",
-                    mode=["trilinear"],
-                    align_corners=True,
-                ),
-                Resized(
-                    keys=["image2d"],
-                    spatial_size=self.img_shape,
-                    size_mode="longest",
-                    mode=["area"],
-                ),
-                DivisiblePadd(
-                    keys=["image3d"],
-                    k=self.vol_shape,
-                    mode="constant",
-                    constant_values=0,
-                ),
-                DivisiblePadd(
-                    keys=["image2d"],
-                    k=self.img_shape,
-                    mode="constant",
-                    constant_values=0,
-                ),
-                ToTensord(
-                    keys=["image3d", "image2d"],
-                ),
+                Resized(keys=["image3d"], spatial_size=self.vol_shape, size_mode="longest", mode=["trilinear"], align_corners=True,),
+                Resized(keys=["image2d"], spatial_size=self.img_shape, size_mode="longest", mode=["area"],),
+                DivisiblePadd(keys=["image3d"], k=self.vol_shape, mode="constant", constant_values=0,),
+                DivisiblePadd(keys=["image2d"], k=self.img_shape, mode="constant", constant_values=0,),
+                ToTensord(keys=["image3d", "image2d"],),
             ]
         )
 
         self.val_datasets = UnpairedDataset(
-            keys=["image3d", "image2d"],
-            data=[self.val_image3d_files, self.val_image2d_files],
-            transform=self.val_transforms,
-            length=self.val_samples,
-            batch_size=self.batch_size,
+            keys=["image3d", "image2d"], data=[self.val_image3d_files, self.val_image2d_files], transform=self.val_transforms, length=self.val_samples, batch_size=self.batch_size,
         )
 
-        self.val_loader = DataLoader(
-            self.val_datasets,
-            batch_size=self.batch_size,
-            num_workers=16,
-            collate_fn=list_data_collate,
-            shuffle=True,
-        )
+        self.val_loader = DataLoader(self.val_datasets, batch_size=self.batch_size, num_workers=16, collate_fn=list_data_collate, shuffle=True,)
         return self.val_loader
 
 
@@ -411,26 +252,11 @@ if __name__ == "__main__":
         # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/train/images'),
         # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/test/images/'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/Imagenglab/processed/train/images"),
     ]
     train_label3d_folders = []

@@ -45,12 +45,7 @@ from dvr.renderer import DirectVolumeFrontToBackRenderer
 
 
 def make_cameras_dea(
-    dist: torch.Tensor,
-    elev: torch.Tensor,
-    azim: torch.Tensor,
-    fov: int = 10,
-    znear: int = 18.0,
-    zfar: int = 22.0,
+    dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor, fov: int = 10, znear: int = 18.0, zfar: int = 22.0,
 ):
     assert dist.device == elev.device == azim.device
     _device = dist.device
@@ -84,14 +79,7 @@ class DXRLightningModule(LightningModule):
 
         self.save_hyperparameters()
 
-        self.fwd_renderer = DirectVolumeFrontToBackRenderer(
-            image_width=self.img_shape,
-            image_height=self.img_shape,
-            n_pts_per_ray=self.n_pts_per_ray,
-            min_depth=4.0,
-            max_depth=8.0,
-            ndc_extent=4.0,
-        )
+        self.fwd_renderer = DirectVolumeFrontToBackRenderer(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=4.0, max_depth=8.0, ndc_extent=4.0,)
 
         self.inv_renderer = nn.Sequential(
             Unet(
@@ -124,30 +112,11 @@ class DXRLightningModule(LightningModule):
         )
 
         self.unet3d_model = DiffusionModelUNet(
-            spatial_dims=3,
-            in_channels=1,
-            out_channels=1,
-            num_channels=[16, 32, 64, 128, 256],
-            attention_levels=[False, False, False, True, True],
-            norm_num_groups=16,
-            num_res_blocks=2,
+            spatial_dims=3, in_channels=1, out_channels=1, num_channels=[16, 32, 64, 128, 256], attention_levels=[False, False, False, True, True], norm_num_groups=16, num_res_blocks=2,
         )
 
-        self.ddpmsch = DDPMScheduler(
-            num_train_timesteps=self.timesteps,
-            schedule="scaled_linear_beta",
-            prediction_type=hparams.prediction_type,
-            beta_start=0.0005,
-            beta_end=0.0195,
-        )
-        self.ddimsch = DDIMScheduler(
-            num_train_timesteps=self.timesteps,
-            schedule="scaled_linear_beta",
-            prediction_type=hparams.prediction_type,
-            beta_start=0.0005,
-            beta_end=0.0195,
-            clip_sample=False,
-        )
+        self.ddpmsch = DDPMScheduler(num_train_timesteps=self.timesteps, schedule="scaled_linear_beta", prediction_type=hparams.prediction_type, beta_start=0.0005, beta_end=0.0195,)
+        self.ddimsch = DDIMScheduler(num_train_timesteps=self.timesteps, schedule="scaled_linear_beta", prediction_type=hparams.prediction_type, beta_start=0.0005, beta_end=0.0195, clip_sample=False,)
         self.ddimsch.set_timesteps(num_inference_steps=200)
 
         self.inferer = DiffusionInferer(scheduler=self.ddpmsch)
@@ -177,13 +146,7 @@ class DXRLightningModule(LightningModule):
 
         # Process (resample) the clarity from ray views to ndc
         gpoints = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
-        values = F.grid_sample(
-            frustum,
-            gpoints.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3),
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=False,
-        )
+        values = F.grid_sample(frustum, gpoints.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
 
         scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
         interp = []
@@ -216,11 +179,7 @@ class DXRLightningModule(LightningModule):
         figure_xr_hidden = image2d
 
         view_shape_ = [self.batch_size, 1]
-        volume_dx_approx = self.forward_volume(
-            image2d=torch.cat([figure_ct_random, image2d]),
-            cameras=join_cameras_as_batch([view_random, view_hidden]),
-            n_views=[1, 1],
-        )
+        volume_dx_approx = self.forward_volume(image2d=torch.cat([figure_ct_random, image2d]), cameras=join_cameras_as_batch([view_random, view_hidden]), n_views=[1, 1],)
         volume_ct_approx, volume_xr_approx = torch.split(volume_dx_approx, batchsz)
 
         # Create timesteps
@@ -228,18 +187,10 @@ class DXRLightningModule(LightningModule):
 
         # Diffusion step
         volume_ct_latent = torch.randn_like(image3d)
-        volume_ct_interp = self.ddpmsch.add_noise(
-            original_samples=volume_ct_approx,
-            noise=volume_ct_latent,
-            timesteps=timesteps,
-        )
+        volume_ct_interp = self.ddpmsch.add_noise(original_samples=volume_ct_approx, noise=volume_ct_latent, timesteps=timesteps,)
 
         volume_xr_latent = torch.randn_like(image3d)
-        volume_xr_interp = self.ddpmsch.add_noise(
-            original_samples=volume_xr_approx,
-            noise=volume_xr_latent,
-            timesteps=timesteps,
-        )
+        volume_xr_interp = self.ddpmsch.add_noise(original_samples=volume_xr_approx, noise=volume_xr_latent, timesteps=timesteps,)
 
         if self.ddpmsch.prediction_type == "v_prediction":
             volume_ct_target = self.ddpmsch.get_velocity(image3d, volume_ct_latent, timesteps)
@@ -266,13 +217,7 @@ class DXRLightningModule(LightningModule):
         im3d_loss = self.l1loss(volume_ct_target, volume_ct_output) + self.l1loss(volume_ct_approx, image3d)
 
         self.log(
-            f"{stage}_im3d_loss",
-            im3d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
 
         im2d_loss = (
@@ -280,32 +225,18 @@ class DXRLightningModule(LightningModule):
         )
 
         self.log(
-            f"{stage}_im2d_loss",
-            im2d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
 
         # Visualization step
         if batch_idx == 0:
             with torch.no_grad():
                 volume_ct_latent = torch.randn_like(image3d)
-                volume_ct_sample = self.inferer.sample(
-                    input_noise=volume_ct_latent,
-                    diffusion_model=self.unet3d_model,
-                    scheduler=self.ddimsch,
-                )
+                volume_ct_sample = self.inferer.sample(input_noise=volume_ct_latent, diffusion_model=self.unet3d_model, scheduler=self.ddimsch,)
                 figure_ct_sample = self.forward_screen(image3d=volume_ct_sample, cameras=view_random)
 
                 volume_xr_latent = torch.randn_like(image3d)
-                volume_xr_sample = self.inferer.sample(
-                    input_noise=volume_xr_latent,
-                    diffusion_model=self.unet3d_model,
-                    scheduler=self.ddimsch,
-                )
+                volume_xr_sample = self.inferer.sample(input_noise=volume_xr_latent, diffusion_model=self.unet3d_model, scheduler=self.ddimsch,)
                 figure_xr_sample = self.forward_screen(image3d=volume_xr_sample, cameras=view_hidden)
                 viz2d = torch.cat(
                     [
@@ -341,9 +272,7 @@ class DXRLightningModule(LightningModule):
                 tensorboard = self.logger.experiment
                 grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
                 tensorboard.add_image(
-                    f"{stage}_df_samples",
-                    grid2d,
-                    self.current_epoch * self.batch_size + batch_idx,
+                    f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,
                 )
 
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss
@@ -362,24 +291,14 @@ class DXRLightningModule(LightningModule):
     def on_train_epoch_end(self):
         loss = torch.stack(self.train_step_outputs).mean()
         self.log(
-            f"train_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"train_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.train_step_outputs.clear()  # free memory
 
     def on_validation_epoch_end(self):
         loss = torch.stack(self.validation_step_outputs).mean()
         self.log(
-            f"validation_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"validation_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.validation_step_outputs.clear()  # free memory
 
@@ -422,10 +341,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
     parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
     parser.add_argument(
-        "--prediction_type",
-        type=str,
-        default="sample",
-        help="prediction_type for network",
+        "--prediction_type", type=str, default="sample", help="prediction_type for network",
     )
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
 
@@ -474,26 +390,11 @@ if __name__ == "__main__":
     # Create data module
     train_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
@@ -527,26 +428,11 @@ if __name__ == "__main__":
 
     val_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),

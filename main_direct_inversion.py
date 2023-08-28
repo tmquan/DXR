@@ -50,12 +50,7 @@ from nerv.renderer import NeRVFrontToBackInverseRenderer, backbones
 
 
 def make_cameras_dea(
-    dist: torch.Tensor,
-    elev: torch.Tensor,
-    azim: torch.Tensor,
-    fov: int = 10,
-    znear: int = 18.0,
-    zfar: int = 22.0,
+    dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor, fov: int = 10, znear: int = 18.0, zfar: int = 22.0,
 ):
     assert dist.device == elev.device == azim.device
     _device = dist.device
@@ -92,18 +87,11 @@ class DXRLightningModule(LightningModule):
 
         self.save_hyperparameters()
 
-        self.fwd_renderer = DirectVolumeFrontToBackRenderer(
-            image_width=self.img_shape,
-            image_height=self.img_shape,
-            n_pts_per_ray=self.n_pts_per_ray,
-            min_depth=4.0,
-            max_depth=8.0,
-            ndc_extent=4.0,
-        )
+        self.fwd_renderer = DirectVolumeFrontToBackRenderer(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=4.0, max_depth=8.0, ndc_extent=4.0,)
 
         self.inv_renderer = NeRVFrontToBackInverseRenderer(
             in_channels=1,
-            out_channels=self.sh**2 if self.sh > 0 else 1,
+            out_channels=self.sh ** 2 if self.sh > 0 else 1,
             vol_shape=self.vol_shape,
             img_shape=self.img_shape,
             n_pts_per_ray=self.n_pts_per_ray,
@@ -126,20 +114,9 @@ class DXRLightningModule(LightningModule):
         return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
 
     def forward_volume(
-        self,
-        image2d,
-        cameras,
-        n_views=[2, 1],
-        resample_clarity=True,
-        resample_volumes=False,
+        self, image2d, cameras, n_views=[2, 1], resample_clarity=True, resample_volumes=False,
     ):
-        return self.inv_renderer(
-            image2d,
-            cameras,
-            n_views,
-            resample_clarity=resample_clarity,
-            resample_volumes=resample_volumes,
-        )
+        return self.inv_renderer(image2d, cameras, n_views, resample_clarity=resample_clarity, resample_volumes=resample_volumes,)
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         image3d = batch["image3d"] * 2.0 - 1.0
@@ -165,9 +142,7 @@ class DXRLightningModule(LightningModule):
 
         # Reconstruct the Encoder-Decoder
         volume_dx_concat = self.forward_volume(
-            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]),
-            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
-            n_views=[1, 1, 1],
+            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), n_views=[1, 1, 1],
         )
         volume_xr_hidden, volume_ct_random, volume_ct_hidden = torch.split(volume_dx_concat, batchsz)
 
@@ -191,33 +166,18 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_xr_hidden_hidden, figure_xr_hidden)
         )
         if self.lpips:
-            im2d_loss_inv += self.lpips_(
-                figure_xr_hidden_random.repeat(1, 3, 1, 1),
-                figure_ct_random.repeat(1, 3, 1, 1),
-            )
+            im2d_loss_inv += self.lpips_(figure_xr_hidden_random.repeat(1, 3, 1, 1), figure_ct_random.repeat(1, 3, 1, 1),)
 
         im3d_loss_inv = self.l1loss(volume_ct_random, image3d) + self.l1loss(volume_ct_hidden, image3d)
 
         im2d_loss = im2d_loss_inv
         self.log(
-            f"{stage}_im2d_loss",
-            im2d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
 
         im3d_loss = im3d_loss_inv
         self.log(
-            f"{stage}_im3d_loss",
-            im3d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
 
         # Visualization step
@@ -255,9 +215,7 @@ class DXRLightningModule(LightningModule):
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
             tensorboard.add_image(
-                f"{stage}_df_samples",
-                grid2d,
-                self.current_epoch * self.batch_size + batch_idx,
+                f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,
             )
 
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss
@@ -276,35 +234,19 @@ class DXRLightningModule(LightningModule):
     def on_train_epoch_end(self):
         loss = torch.stack(self.train_step_outputs).mean()
         self.log(
-            f"train_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"train_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.train_step_outputs.clear()  # free memory
 
     def on_validation_epoch_end(self):
         loss = torch.stack(self.validation_step_outputs).mean()
         self.log(
-            f"validation_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"validation_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.validation_step_outputs.clear()  # free memory
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            [
-                {"params": self.inv_renderer.parameters()},
-            ],
-            lr=self.lr,
-            betas=(0.9, 0.999),
-        )
+        optimizer = torch.optim.AdamW([{"params": self.inv_renderer.parameters()},], lr=self.lr, betas=(0.9, 0.999),)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200], gamma=0.1)
         return [optimizer], [scheduler]
 
@@ -345,10 +287,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
     parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
     parser.add_argument(
-        "--prediction_type",
-        type=str,
-        default="sample",
-        help="prediction_type for network",
+        "--prediction_type", type=str, default="sample", help="prediction_type for network",
     )
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
 
@@ -397,26 +336,11 @@ if __name__ == "__main__":
     # Create data module
     train_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
@@ -450,26 +374,11 @@ if __name__ == "__main__":
 
     val_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
