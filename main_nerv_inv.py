@@ -54,8 +54,7 @@ def make_cameras_dea(
     R, T = look_at_view_transform(dist=dist.float(), elev=elev.float() * 90, azim=azim.float() * 180)
     if is_orthogonal:
         return FoVOrthographicCameras(R=R, T=T, znear=znear, zfar=zfar).to(_device)
-    else:
-        return FoVPerspectiveCameras(R=R, T=T, fov=fov, znear=znear, zfar=zfar).to(_device)
+    return FoVPerspectiveCameras(R=R, T=T, fov=fov, znear=znear, zfar=zfar).to(_device)
 
 class DXRLightningModule(LightningModule):
     def __init__(self, hparams, **kwargs):
