@@ -39,6 +39,18 @@ from datamodule import UnpairedDataModule
 from dvr.renderer import DirectVolumeFrontToBackRenderer
 from nerv.renderer import NeRVFrontToBackInverseRenderer
 
+backbones = {
+    "efficientnet-b0": (16, 24, 40, 112, 320),
+    "efficientnet-b1": (16, 24, 40, 112, 320),
+    "efficientnet-b2": (16, 24, 48, 120, 352),
+    "efficientnet-b3": (24, 32, 48, 136, 384),
+    "efficientnet-b4": (24, 32, 56, 160, 448),
+    "efficientnet-b5": (24, 40, 64, 176, 512),
+    "efficientnet-b6": (32, 40, 72, 200, 576),
+    "efficientnet-b7": (32, 48, 80, 224, 640),
+    "efficientnet-b8": (32, 56, 88, 248, 704),
+    "efficientnet-l2": (72, 104, 176, 480, 1376),
+}
 
 def make_cameras_dea(
     dist: torch.Tensor, 
@@ -113,7 +125,8 @@ class DXRLightningModule(LightningModule):
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
-        self.lpips_ = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
+        if self.lpips:
+            self.lpips_ = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
 
     def forward_screen(self, image3d, cameras):
         return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
