@@ -118,10 +118,8 @@ class DXRLightningModule(LightningModule):
     def forward_screen(self, image3d, cameras):
         return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
 
-    def forward_volume(
-        self, image2d, cameras, n_views=[2, 1], resample_clarity=False, resample_volumes=True,
-    ):
-        return self.inv_renderer(image2d, cameras, n_views, resample_clarity=resample_clarity, resample_volumes=resample_volumes,)
+    def forward_volume(self, image2d, cameras, n_views=[2, 1]):
+        return self.inv_renderer(image2d, cameras, n_views)
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         image3d = batch["image3d"] * 2.0 - 1.0
@@ -139,6 +137,7 @@ class DXRLightningModule(LightningModule):
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
         view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=20, znear=8, zfar=12)
+        
         # Construct the samples in 2D
         figure_xr_hidden = image2d
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
