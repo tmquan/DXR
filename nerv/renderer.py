@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from pytorch3d.renderer import NDCMultinomialRaysampler
 from pytorch3d.renderer.cameras import (
     FoVPerspectiveCameras,
     look_at_rotation,
@@ -114,14 +113,6 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             cross_attention_dim=12,  # flatR | flatT
         )
 
-        self.raysampler = NDCMultinomialRaysampler(
-            image_width=self.img_shape, 
-            image_height=self.img_shape, 
-            n_pts_per_ray=self.n_pts_per_ray, 
-            min_depth=8.0, 
-            max_depth=4.0,
-        )
-
     def forward(self, image2d, cameras, n_views=[2, 1], resample=True):
         _device = image2d.device
         B = image2d.shape[0]
@@ -137,9 +128,9 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         ).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
         
         if resample:
-            z = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
-            y = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
-            x = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
+            z = torch.linspace(-1.5, 1.5, steps=self.vol_shape, device=_device)
+            y = torch.linspace(-1.5, 1.5, steps=self.vol_shape, device=_device)
+            x = torch.linspace(-1.5, 1.5, steps=self.vol_shape, device=_device)
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
             # Process (resample) the density from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
