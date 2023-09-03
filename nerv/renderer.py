@@ -29,8 +29,19 @@ backbones = {
     "efficientnet-l2": (72, 104, 176, 480, 1376),
 }
 
+
 class NeRVFrontToBackInverseRenderer(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, img_shape=400, vol_shape=256, n_pts_per_ray=256, sh=0, pe=8, backbone="efficientnet-b7",) -> None:
+    def __init__(
+        self,
+        in_channels=1,
+        out_channels=1,
+        img_shape=400,
+        vol_shape=256,
+        n_pts_per_ray=256,
+        sh=0,
+        pe=8,
+        backbone="efficientnet-b7",
+    ) -> None:
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -38,13 +49,13 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         self.vol_shape = vol_shape
         self.n_pts_per_ray = n_pts_per_ray
         assert backbone in backbones.keys()
-        
+
         self.density_net = DiffusionModelUNet(
             spatial_dims=2,
             in_channels=1,  # Condition with straight/hidden view
             out_channels=self.n_pts_per_ray,
             num_channels=backbones[backbone],
-            attention_levels=[False, False, True, True, True],
+            attention_levels=[False, False, False, True, True],
             norm_num_groups=16,
             num_res_blocks=2,
             with_conditioning=True,
@@ -57,15 +68,21 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         assert B == sum(n_views)  # batch must be equal to number of projections
         if timesteps is None:
             timesteps = torch.zeros((B,), device=_device).long()
-        
-        viewpts = torch.cat([cameras.R.reshape(B, 1, -1), cameras.T.reshape(B, 1, -1),], dim=-1,)
-        
+
+        viewpts = torch.cat(
+            [
+                cameras.R.reshape(B, 1, -1),
+                cameras.T.reshape(B, 1, -1),
+            ],
+            dim=-1,
+        )
+
         density = self.density_net(
-            x=image2d, 
-            context=viewpts, 
+            x=image2d,
+            context=viewpts,
             timesteps=timesteps,
         ).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
-        
+
         if resample:
             pass
             # z = torch.linspace(-1.5, 1.5, steps=self.vol_shape, device=_device)
@@ -83,5 +100,5 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             #     interp.append(value_)
 
             # density = torch.cat(interp, dim=0)
-            
+
         return density
