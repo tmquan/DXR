@@ -274,7 +274,7 @@ class DXRLightningModule(LightningModule):
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
 
         # Diffusion step: 2 kinds of blending
-        timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()
+        timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long() # 3 views
 
         volume_xr_latent = torch.randn_like(image3d)
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
@@ -294,7 +294,7 @@ class DXRLightningModule(LightningModule):
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]),
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]),
             n_views=[1, 1, 1] * batchsz,
-            timesteps=timesteps,
+            timesteps=timesteps.repeat(3),
         )
 
         (
@@ -305,7 +305,10 @@ class DXRLightningModule(LightningModule):
 
         # Reconstruct the Encoder-Decoder
         volume_dx_output = self.forward_volume(
-            image2d=torch.cat([figure_xr_output_hidden, figure_ct_output_hidden]), cameras=join_cameras_as_batch([view_hidden, view_hidden]), n_views=[1, 1] * batchsz, timesteps=timesteps
+            image2d=torch.cat([figure_xr_output_hidden, figure_ct_output_hidden]), 
+            cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
+            n_views=[1, 1] * batchsz, 
+            timesteps=None
         )
 
         volume_xr_hidden_output, volume_ct_hidden_output = torch.split(volume_dx_output, batchsz)
@@ -372,6 +375,10 @@ class DXRLightningModule(LightningModule):
             sync_dist=True,
             batch_size=self.batch_size,
         )
+        
+        # Construct the context pose to diffusion model
+        pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1),], dim=-1,)
+        pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1),], dim=-1,)
 
         # Visualization step
         if batch_idx == 0:
@@ -392,6 +399,7 @@ class DXRLightningModule(LightningModule):
                     image2d=figure_xr_sample_hidden,
                     cameras=view_hidden,
                     n_views=[1] * batchsz,
+                    timesteps=None,
                 )
 
                 figure_xr_sample_hidden_random = self.forward_screen(image3d=volume_xr_sample_hidden, cameras=view_random)
