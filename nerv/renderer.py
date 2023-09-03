@@ -9,9 +9,13 @@ from pytorch3d.renderer.cameras import (
     look_at_rotation,
     look_at_view_transform,
 )
-from diffusers import UNet2DModel
-from monai.networks.nets import Unet, EfficientNetBN
+
+from monai.networks.nets import Unet
+from monai.networks.layers import Reshape
 from monai.networks.layers.factories import Norm
+
+from generative.inferers import DiffusionInferer
+from generative.networks.nets import DiffusionModelUNet
 
 from nerfstudio.field_components import encodings
 
@@ -88,139 +92,58 @@ def make_cameras_RT(R: torch.Tensor, T: torch.Tensor):
     return FoVPerspectiveCameras(R=R, T=T, fov=16, znear=8.0, zfar=12.0).to(_device)
 
 
-class NeRVFrontToBackFrustumFeaturer(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, backbone="efficientnet-b7") -> None:
-        super().__init__()
-        assert backbone in backbones.keys()
-        self.model = EfficientNetBN(model_name=backbone, spatial_dims=2, in_channels=in_channels, num_classes=out_channels, pretrained=True, adv_prop=True,)  # (24, 32, 56, 160, 448)
-
-    def forward(self, figures):
-        camfeat = self.model.forward(figures)
-        return camfeat
-
-
 class NeRVFrontToBackInverseRenderer(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, img_shape=400, vol_shape=256, n_pts_per_ray=256, sh=0, pe=8, backbone="efficientnet-b7",) -> None:
         super().__init__()
-        self.sh = sh
-        self.pe = pe
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.img_shape = img_shape
         self.vol_shape = vol_shape
         self.n_pts_per_ray = n_pts_per_ray
         assert backbone in backbones.keys()
-        if self.pe > 0:
-            # Generate grid
-            zs = torch.linspace(-1, 1, steps=self.vol_shape)
-            ys = torch.linspace(-1, 1, steps=self.vol_shape)
-            xs = torch.linspace(-1, 1, steps=self.vol_shape)
-            z, y, x = torch.meshgrid(zs, ys, xs)
-            zyx = torch.stack([z, y, x], dim=-1)  # torch.Size([100, 100, 100, 3])
-            num_frequencies = self.pe
-            min_freq_exp = 0
-            max_freq_exp = 8
-            encoder = encodings.NeRFEncoding(in_dim=self.pe, num_frequencies=num_frequencies, min_freq_exp=min_freq_exp, max_freq_exp=max_freq_exp,)
-            pebasis = encoder(zyx.view(-1, 3))
-            pebasis = pebasis.view(self.vol_shape, self.vol_shape, self.vol_shape, -1).permute(3, 0, 1, 2)
-            self.register_buffer("pebasis", pebasis)
-
-        if self.sh > 0:
-            # Generate grid
-            zs = torch.linspace(-1, 1, steps=self.vol_shape)
-            ys = torch.linspace(-1, 1, steps=self.vol_shape)
-            xs = torch.linspace(-1, 1, steps=self.vol_shape)
-            z, y, x = torch.meshgrid(zs, ys, xs)
-            zyx = torch.stack([z, y, x], dim=-1)  # torch.Size([100, 100, 100, 3])
-
-            encoder = encodings.SHEncoding(self.sh)
-            assert out_channels == self.sh ** 2 if self.sh > 0 else 1
-            shbasis = encoder(zyx.view(-1, 3))
-            shbasis = shbasis.view(self.vol_shape, self.vol_shape, self.vol_shape, -1).permute(3, 0, 1, 2)
-            self.register_buffer("shbasis", shbasis)
-
-        self.clarity_net = nn.Sequential(
-            Unet(
-                spatial_dims=2,
-                in_channels=1,
-                out_channels=self.n_pts_per_ray,
-                channels=backbones[backbone],
-                strides=(2, 2, 2, 2, 2),
-                num_res_units=2,
-                kernel_size=3,
-                up_kernel_size=3,
-                act=("LeakyReLU", {"inplace": True}),
-                norm=Norm.BATCH,
-                dropout=0.5,
-            ),
+        
+        self.density_net = DiffusionModelUNet(
+            spatial_dims=2,
+            in_channels=1,  # Condition with straight/hidden view
+            out_channels=self.n_pts_per_ray,
+            num_channels=backbones[backbone],
+            attention_levels=[False, False, True, True, True],
+            norm_num_groups=16,
+            num_res_blocks=2,
+            with_conditioning=True,
+            cross_attention_dim=12,  # flatR | flatT
         )
 
-        self.density_net = nn.Sequential(
-            Unet(
-                spatial_dims=3,
-                in_channels=1 + (2 * 3 * self.pe),
-                out_channels=1,
-                channels=backbones[backbone],
-                strides=(2, 2, 2, 2, 2),
-                num_res_units=2,
-                kernel_size=3,
-                up_kernel_size=3,
-                act=("LeakyReLU", {"inplace": True}),
-                norm=Norm.BATCH,
-                dropout=0.5,
-            ),
+        self.raysampler = NDCMultinomialRaysampler(
+            image_width=self.img_shape, 
+            image_height=self.img_shape, 
+            n_pts_per_ray=self.n_pts_per_ray, 
+            min_depth=8.0, 
+            max_depth=4.0,
         )
 
-        self.mixture_net = nn.Sequential(
-            Unet(
-                spatial_dims=3,
-                in_channels=2 + (2 * 3 * self.pe),
-                out_channels=1,
-                channels=backbones[backbone],
-                strides=(2, 2, 2, 2, 2),
-                num_res_units=2,
-                kernel_size=3,
-                up_kernel_size=3,
-                act=("LeakyReLU", {"inplace": True}),
-                norm=Norm.BATCH,
-                dropout=0.5,
-            ),
-        )
-
-        self.refiner_net = nn.Sequential(
-            Unet(
-                spatial_dims=3,
-                in_channels=3 + (2 * 3 * self.pe),
-                out_channels=self.out_channels,
-                channels=backbones[backbone],
-                strides=(2, 2, 2, 2, 2),
-                num_res_units=2,
-                kernel_size=3,
-                up_kernel_size=3,
-                act=("LeakyReLU", {"inplace": True}),
-                norm=Norm.BATCH,
-                dropout=0.5,
-            ),
-        )
-
-        self.raysampler = NDCMultinomialRaysampler(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=8.0, max_depth=4.0,)
-
-    def forward(
-        self, image2d, cameras, n_views=[2, 1], resample_clarity=True, resample_volumes=False,
-    ):
+    def forward(self, image2d, cameras, n_views=[2, 1], resample=True):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        clarity = self.clarity_net(image2d).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
-
-        if resample_clarity:
+        timezeros = torch.zeros((B,), device=_device).long()
+        
+        viewpts = torch.cat([cameras.R.reshape(B, 1, -1), cameras.T.reshape(B, 1, -1),], dim=-1,)
+        
+        density = self.density_net(
+            x=image2d, 
+            context=viewpts, 
+            timesteps=timezeros
+        ).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
+        
+        if resample:
             z = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
             y = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
             x = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
             coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
-            # Process (resample) the clarity from ray views to ndc
+            # Process (resample) the density from ray views to ndc
             points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
-            values = F.grid_sample(clarity, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
+            values = F.grid_sample(density, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
 
             scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
             interp = []
@@ -228,42 +151,6 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 value_ = scene_.mean(dim=0, keepdim=True)
                 interp.append(value_)
 
-            clarity = torch.cat(interp, dim=0)
-
-        if self.pe > 0:
-            density = self.density_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity], dim=1))
-            mixture = self.mixture_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity, density,], dim=1,))
-            shcoeff = self.refiner_net(torch.cat([self.pebasis.repeat(clarity.shape[0], 1, 1, 1, 1), clarity, density, mixture,], dim=1,))
-        else:
-            density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
-            mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
-            shcoeff = self.refiner_net(torch.cat([clarity, density, mixture], dim=1))  # shcoeff = torch.add(shcoeff, clarity)
-        if self.sh > 0:
-            shcomps = torch.einsum("abcde,bcde->abcde", shcoeff, self.shbasis)
-        else:
-            shcomps = shcoeff
-
-        volumes = []
-        for idx, n_view in enumerate(n_views):
-            volume = shcomps[[idx]].repeat(n_view, 1, 1, 1, 1)
-            volumes.append(volume)
-        volumes = torch.cat(volumes, dim=0)
-
-        if resample_volumes:
-            z = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
-            y = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
-            x = torch.linspace(-2.0, 2.0, steps=self.vol_shape, device=_device)
-            coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
-            # Process (resample) the clarity from ray views to ndc
-            points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
-            values = F.grid_sample(volumes, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
-
-            scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
-            interp = []
-            for scene_, n_view in zip(scenes, n_views):
-                value_ = scene_.mean(dim=0, keepdim=True)
-                interp.append(value_)
-
-            volumes = torch.cat(interp, dim=0)
-
-        return volumes
+            density = torch.cat(interp, dim=0)
+            
+        return density
