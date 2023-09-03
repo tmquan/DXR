@@ -113,18 +113,19 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             cross_attention_dim=12,  # flatR | flatT
         )
 
-    def forward(self, image2d, cameras, n_views=[2, 1], resample=True):
+    def forward(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        timezeros = torch.zeros((B,), device=_device).long()
+        if timesteps is None:
+            timesteps = torch.zeros((B,), device=_device).long()
         
         viewpts = torch.cat([cameras.R.reshape(B, 1, -1), cameras.T.reshape(B, 1, -1),], dim=-1,)
         
         density = self.density_net(
             x=image2d, 
             context=viewpts, 
-            timesteps=timezeros
+            timesteps=timesteps,
         ).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
         
         if resample:
