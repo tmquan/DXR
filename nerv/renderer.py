@@ -73,7 +73,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         self.clarity_net = nn.Sequential(
             Unet(spatial_dims=2, 
                 in_channels=1, 
-                out_channels=self.vol_shape, 
+                out_channels=self.n_pts_per_ray, 
                 channels=backbones[backbone], 
                 strides=(2, 2, 2, 2, 2), 
                 num_res_units=2, 
@@ -139,7 +139,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        clarity = self.clarity_net(image2d).view(-1, 1, self.vol_shape, self.img_shape, self.img_shape)
+        clarity = self.clarity_net(image2d).view(-1, 1, self.n_pts_per_ray, self.img_shape, self.img_shape)
 
         density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
         mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
@@ -153,6 +153,20 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         volumes = torch.cat(volumes, dim=0)
 
         if resample:
-            pass
+            z = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
+            y = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
+            x = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
+            coords = torch.stack(torch.meshgrid(x, y, z), dim=-1).view(-1, 3).unsqueeze(0).repeat(B, 1, 1)  # 1 DHW 3 to B DHW 3
+            # Process (resample) the volumes from ray views to ndc
+            points = cameras.transform_points_ndc(coords)  # world to ndc, 1 DHW 3
+            values = F.grid_sample(volumes, points.view(-1, self.vol_shape, self.vol_shape, self.vol_shape, 3), mode="bilinear", padding_mode="zeros", align_corners=False,)
+
+            scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
+            interp = []
+            for scene_, n_view in zip(scenes, n_views):
+                value_ = scene_.mean(dim=0, keepdim=True)
+                interp.append(value_)
+
+            volumes = torch.cat(interp, dim=0)
 
         return volumes

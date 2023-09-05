@@ -91,18 +91,24 @@ class DXRLightningModule(LightningModule):
 
         self.save_hyperparameters()
 
-        self.fwd_renderer = DirectVolumeFrontToBackRenderer(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=8.0, max_depth=12.0, ndc_extent=3.0,)
+        self.fwd_renderer = DirectVolumeFrontToBackRenderer(
+            image_width=self.img_shape, 
+            image_height=self.img_shape, 
+            n_pts_per_ray=self.n_pts_per_ray, 
+            min_depth=4.0, 
+            max_depth=8.0, 
+            ndc_extent=2.0,
+        )
 
-        self.inv_renderer = DiffusionModelUNet(
-            spatial_dims=2,
-            in_channels=1,  # Condition with straight/hidden view
-            out_channels=self.n_pts_per_ray,
-            num_channels=backbones[self.backbone],
-            attention_levels=[False, False, False, True, True],
-            norm_num_groups=16,
-            num_res_blocks=2,
-            with_conditioning=True,
-            cross_attention_dim=12,  # flatR | flatT
+        self.inv_renderer = NeRVFrontToBackInverseRenderer(
+            in_channels=1, 
+            out_channels=self.sh ** 2 if self.sh > 0 else 1, 
+            vol_shape=self.vol_shape, 
+            img_shape=self.img_shape, 
+            n_pts_per_ray=self.n_pts_per_ray, 
+            sh=self.sh, 
+            pe=self.pe, 
+            backbone=self.backbone,
         )
 
         if self.ckpt:
@@ -129,15 +135,16 @@ class DXRLightningModule(LightningModule):
         batchsz = image2d.shape[0]
 
         # Construct the random cameras, -1 and 1 are the same point in azimuths
-        dist_random = 10.0 * torch.ones(self.batch_size, device=_device)
+        dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
         azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
-        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=15, znear=8, zfar=12)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=30, znear=4, zfar=8)
 
-        dist_hidden = 10.0 * torch.ones(self.batch_size, device=_device)
+        dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
-        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=15, znear=8, zfar=12)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=30, znear=4, zfar=8)
+        
         # Construct the samples in 2D
         figure_xr_hidden = image2d
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)

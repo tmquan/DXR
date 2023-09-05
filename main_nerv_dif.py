@@ -35,6 +35,8 @@ from pytorch3d.renderer.cameras import (
     look_at_view_transform,
 )
 
+from monai.networks import normal_init, icnr_init
+
 from generative.inferers import DiffusionInferer
 from generative.networks.nets import DiffusionModelUNet
 from generative.networks.schedulers import DDPMScheduler, DDIMScheduler
@@ -64,6 +66,19 @@ def make_cameras_dea(dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor,
     if is_orthogonal:
         return FoVOrthographicCameras(R=R, T=T, znear=znear, zfar=zfar).to(_device)
     return FoVPerspectiveCameras(R=R, T=T, fov=fov, znear=znear, zfar=zfar).to(_device)
+
+def constant_init(m, val=0, bias=0):
+    cname = m.__class__.__name__
+
+    if getattr(m, "weight", None) is not None and (cname.find("Conv") != -1 or cname.find("Linear") != -1):
+        nn.init.constant_(m.weight.data, val)
+        if getattr(m, "bias", None) is not None:
+            nn.init.constant_(m.bias.data, 0.0)
+
+    elif cname.find("BatchNorm") != -1:
+        nn.init.constant_(m.weight.data, val)
+        nn.init.constant_(m.bias.data, 0)
+
 
 
 class DXRLightningModule(LightningModule):
@@ -99,9 +114,9 @@ class DXRLightningModule(LightningModule):
             image_width=self.img_shape, 
             image_height=self.img_shape, 
             n_pts_per_ray=self.n_pts_per_ray, 
-            min_depth=8.0, 
-            max_depth=12.0, 
-            ndc_extent=3.0,
+            min_depth=4.0, 
+            max_depth=8.0, 
+            ndc_extent=2.0,
         )
 
         self.inv_renderer = NeRVFrontToBackInverseRenderer(
@@ -114,10 +129,23 @@ class DXRLightningModule(LightningModule):
             pe=self.pe, 
             backbone=self.backbone,
         )
-
+        
         self.unet2d_model = DiffusionModelUNet(
-            spatial_dims=2, in_channels=1, out_channels=1, num_channels=backbones[self.backbone], attention_levels=[False, False, False, True, True], norm_num_groups=16, num_res_blocks=2, with_conditioning=True, cross_attention_dim=12,  # Condition with straight/hidden view  # flatR | flatT
+            spatial_dims=2, 
+            in_channels=1, 
+            out_channels=1, 
+            num_channels=backbones[self.backbone], 
+            attention_levels=[False, False, False, True, True], 
+            norm_num_groups=16, 
+            num_res_blocks=2, 
+            with_conditioning=True, 
+            cross_attention_dim=12, # Condition with straight/hidden view  # flatR | flatT
         )
+        
+        # initialize both networks
+        self.inv_renderer.apply(normal_init)
+        self.unet2d_model.apply(normal_init)
+        
         self.ddpmsch = DDPMScheduler(
             num_train_timesteps=self.timesteps, 
             schedule="scaled_linear_beta", 
@@ -150,11 +178,11 @@ class DXRLightningModule(LightningModule):
     def forward_screen(self, image3d, cameras):
         return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results = self.inv_renderer(image2d, cameras, n_views, resample).view(-1, 1, self.vol_shape, self.img_shape, self.img_shape)
+        results = self.inv_renderer(image2d, cameras, n_views, resample).view(-1, 1, self.vol_shape, self.vol_shape, self.vol_shape)
         return results
 
     def forward_timing(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
@@ -174,15 +202,15 @@ class DXRLightningModule(LightningModule):
         batchsz = image2d.shape[0]
 
         # Construct the random cameras, -1 and 1 are the same point in azimuths
-        dist_random = 10.0 * torch.ones(self.batch_size, device=_device)
+        dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
         azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
-        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=15, znear=8, zfar=12)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=20, znear=4, zfar=8)
 
-        dist_hidden = 10.0 * torch.ones(self.batch_size, device=_device)
+        dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
-        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=15, znear=8, zfar=12)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=20, znear=4, zfar=8)
 
         # Construct the samples in 2D
         figure_xr_hidden = image2d
