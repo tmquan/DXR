@@ -24,29 +24,12 @@ def standardized(x, eps=1e-8):
 
 class DirectVolumeRenderer(nn.Module):
     def __init__(
-        self,
-        image_width: int = 256,
-        image_height: int = 256,
-        n_pts_per_ray: int = 320,
-        min_depth: float = 2.0,
-        max_depth: float = 6.0,
-        ndc_extent: float = 3.0,
-        stratified_sampling: bool = False,
+        self, image_width: int = 256, image_height: int = 256, n_pts_per_ray: int = 320, min_depth: float = 2.0, max_depth: float = 6.0, ndc_extent: float = 3.0, stratified_sampling: bool = False,
     ):
         super().__init__()
         self.raymarcher = EmissionAbsorptionRaymarcher()  # BackToFront Raymarcher
-        self.raysampler = NDCMultinomialRaysampler(
-            image_width=image_width,
-            image_height=image_height,
-            n_pts_per_ray=n_pts_per_ray,
-            min_depth=min_depth,
-            max_depth=max_depth,
-            stratified_sampling=stratified_sampling,
-        )
-        self.renderer = VolumeRenderer(
-            raysampler=self.raysampler,
-            raymarcher=self.raymarcher,
-        )
+        self.raysampler = NDCMultinomialRaysampler(image_width=image_width, image_height=image_height, n_pts_per_ray=n_pts_per_ray, min_depth=min_depth, max_depth=max_depth, stratified_sampling=stratified_sampling,)
+        self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent
 
     def forward(self, image3d, cameras, opacity=None, norm_type="standardized", scaling_factor=0.1, is_grayscale=True, return_bundle=False) -> torch.Tensor:
@@ -90,27 +73,10 @@ class DirectVolumeRenderer(nn.Module):
 
 class DirectVolumeFrontToBackRenderer(DirectVolumeRenderer):
     def __init__(
-        self,
-        image_width: int = 256,
-        image_height: int = 256,
-        n_pts_per_ray: int = 320,
-        min_depth: float = 2.0,
-        max_depth: float = 6.0,
-        ndc_extent: float = 3.0,
-        stratified_sampling: bool = False,
+        self, image_width: int = 256, image_height: int = 256, n_pts_per_ray: int = 320, min_depth: float = 2.0, max_depth: float = 6.0, ndc_extent: float = 3.0, stratified_sampling: bool = False,
     ):
         super().__init__()
         self.raymarcher = EmissionAbsorptionFrontToBackRaymarcher()  # FrontToBack
-        self.raysampler = NDCMultinomialRaysampler(
-            image_width=image_width,
-            image_height=image_height,
-            n_pts_per_ray=n_pts_per_ray,
-            min_depth=min_depth,
-            max_depth=max_depth,
-            stratified_sampling=stratified_sampling,
-        )
-        self.renderer = VolumeRenderer(
-            raysampler=self.raysampler,
-            raymarcher=self.raymarcher,
-        )
+        self.raysampler = NDCMultinomialRaysampler(image_width=image_width, image_height=image_height, n_pts_per_ray=n_pts_per_ray, min_depth=min_depth, max_depth=max_depth, stratified_sampling=stratified_sampling,)
+        self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
         self.ndc_extent = ndc_extent

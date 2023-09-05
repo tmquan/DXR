@@ -49,12 +49,7 @@ from nerv.renderer import NeRVFrontToBackInverseRenderer, backbones
 
 
 def make_cameras_dea(
-    dist: torch.Tensor,
-    elev: torch.Tensor,
-    azim: torch.Tensor,
-    fov: int = 10,
-    znear: int = 18.0,
-    zfar: int = 22.0,
+    dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor, fov: int = 10, znear: int = 18.0, zfar: int = 22.0,
 ):
     assert dist.device == elev.device == azim.device
     _device = dist.device
@@ -91,52 +86,15 @@ class DXRLightningModule(LightningModule):
 
         self.save_hyperparameters()
 
-        self.fwd_renderer = DirectVolumeFrontToBackRenderer(
-            image_width=self.img_shape,
-            image_height=self.img_shape,
-            n_pts_per_ray=self.n_pts_per_ray,
-            min_depth=8.0,
-            max_depth=12.0,
-            ndc_extent=4.0,
-        )
+        self.fwd_renderer = DirectVolumeFrontToBackRenderer(image_width=self.img_shape, image_height=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, min_depth=8.0, max_depth=12.0, ndc_extent=4.0,)
 
-        self.inv_renderer = NeRVFrontToBackInverseRenderer(
-            in_channels=1,
-            out_channels=self.sh**2 if self.sh > 0 else 1,
-            vol_shape=self.vol_shape,
-            img_shape=self.img_shape,
-            n_pts_per_ray=self.n_pts_per_ray,
-            sh=self.sh,
-            pe=self.pe,
-            backbone=self.backbone,
-        )
+        self.inv_renderer = NeRVFrontToBackInverseRenderer(in_channels=1, out_channels=self.sh ** 2 if self.sh > 0 else 1, vol_shape=self.vol_shape, img_shape=self.img_shape, n_pts_per_ray=self.n_pts_per_ray, sh=self.sh, pe=self.pe, backbone=self.backbone,)
 
         self.unet2d_model = DiffusionModelUNet(
-            spatial_dims=2,
-            in_channels=1,  # Condition with straight/hidden view
-            out_channels=1,
-            num_channels=backbones[self.backbone],
-            attention_levels=[False, False, False, True, True],
-            norm_num_groups=16,
-            num_res_blocks=2,
-            with_conditioning=True,
-            cross_attention_dim=12,  # flatR | flatT
+            spatial_dims=2, in_channels=1, out_channels=1, num_channels=backbones[self.backbone], attention_levels=[False, False, False, True, True], norm_num_groups=16, num_res_blocks=2, with_conditioning=True, cross_attention_dim=12,  # Condition with straight/hidden view  # flatR | flatT
         )
-        self.ddpmsch = DDPMScheduler(
-            num_train_timesteps=self.timesteps,
-            schedule="scaled_linear_beta",
-            prediction_type=hparams.prediction_type,
-            beta_start=0.0005,
-            beta_end=0.0195,
-        )
-        self.ddimsch = DDIMScheduler(
-            num_train_timesteps=self.timesteps,
-            schedule="scaled_linear_beta",
-            prediction_type=hparams.prediction_type,
-            beta_start=0.0005,
-            beta_end=0.0195,
-            clip_sample=True,
-        )
+        self.ddpmsch = DDPMScheduler(num_train_timesteps=self.timesteps, schedule="scaled_linear_beta", prediction_type=hparams.prediction_type, beta_start=0.0005, beta_end=0.0195,)
+        self.ddimsch = DDIMScheduler(num_train_timesteps=self.timesteps, schedule="scaled_linear_beta", prediction_type=hparams.prediction_type, beta_start=0.0005, beta_end=0.0195, clip_sample=True,)
         self.ddimsch.set_timesteps(num_inference_steps=100)
         self.inferer = DiffusionInferer(scheduler=self.ddimsch)
 
@@ -154,20 +112,9 @@ class DXRLightningModule(LightningModule):
         return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
 
     def forward_volume(
-        self,
-        image2d,
-        cameras,
-        n_views=[2, 1],
-        resample_clarity=True,
-        resample_volumes=False,
+        self, image2d, cameras, n_views=[2, 1], resample_clarity=True, resample_volumes=False,
     ):
-        return self.inv_renderer(
-            image2d,
-            cameras,
-            n_views,
-            resample_clarity=resample_clarity,
-            resample_volumes=resample_volumes,
-        )
+        return self.inv_renderer(image2d, cameras, n_views, resample_clarity=resample_clarity, resample_volumes=resample_volumes,)
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         image3d = batch["image3d"] * 2.0 - 1.0
@@ -195,27 +142,11 @@ class DXRLightningModule(LightningModule):
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()
 
         # Construct the context pose to diffusion model
-        pose_random = torch.cat(
-            [
-                view_random.R.reshape(batchsz, 1, -1),
-                view_random.T.reshape(batchsz, 1, -1),
-            ],
-            dim=-1,
-        )
-        pose_hidden = torch.cat(
-            [
-                view_hidden.R.reshape(batchsz, 1, -1),
-                view_hidden.T.reshape(batchsz, 1, -1),
-            ],
-            dim=-1,
-        )
+        pose_random = torch.cat([view_random.R.reshape(batchsz, 1, -1), view_random.T.reshape(batchsz, 1, -1),], dim=-1,)
+        pose_hidden = torch.cat([view_hidden.R.reshape(batchsz, 1, -1), view_hidden.T.reshape(batchsz, 1, -1),], dim=-1,)
 
         # Reconstruct the Encoder-Decoder
-        volume_dx_inverse = self.forward_volume(
-            image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]),
-            cameras=join_cameras_as_batch([view_hidden, view_hidden]),
-            n_views=[1, 1],
-        )
+        volume_dx_inverse = self.forward_volume(image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), cameras=join_cameras_as_batch([view_hidden, view_hidden]), n_views=[1, 1],)
         volume_xr_hidden_inverse, volume_ct_hidden_inverse = torch.split(volume_dx_inverse, batchsz)
 
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
@@ -227,26 +158,13 @@ class DXRLightningModule(LightningModule):
             volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
             volume_ct_hidden_inverse = volume_ct_hidden_inverse.sum(dim=1, keepdim=True)
 
-        im2d_loss_inv = (
-            self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
-            + self.l1loss(figure_ct_hidden_inverse_random, figure_ct_random)
-            + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden)
-        )
+        im2d_loss_inv = self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) + self.l1loss(figure_ct_hidden_inverse_random, figure_ct_random) + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden)
 
         if self.lpips:
             figure_xr_hidden_inverse_random = torch.nan_to_num(figure_xr_hidden_inverse_random, 0, 1, -1)
-            lpips_loss = self.lpips_(
-                figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1),
-                figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),
-            )
+            lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),)
             self.log(
-                f"{stage}_lpip_loss",
-                lpips_loss,
-                on_step=(stage == "train"),
-                prog_bar=True,
-                logger=True,
-                sync_dist=True,
-                batch_size=self.batch_size,
+                f"{stage}_lpip_loss", lpips_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
             )
             im2d_loss_inv += lpips_loss
 
@@ -364,22 +282,10 @@ class DXRLightningModule(LightningModule):
 
         # Log the final losses
         self.log(
-            f"{stage}_im2d_loss",
-            im2d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
         self.log(
-            f"{stage}_im3d_loss",
-            im3d_loss,
-            on_step=(stage == "train"),
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
-            batch_size=self.batch_size,
+            f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,
         )
 
         # Visualization step
@@ -389,13 +295,7 @@ class DXRLightningModule(LightningModule):
                 volume_xr_latent = torch.randn_like(image3d)
                 figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
 
-                figure_xr_sample_hidden = self.inferer.sample(
-                    input_noise=figure_xr_latent_hidden,
-                    diffusion_model=self.unet2d_model,
-                    conditioning=pose_hidden,
-                    scheduler=self.ddimsch,
-                    verbose=False,
-                )
+                figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden, diffusion_model=self.unet2d_model, conditioning=pose_hidden, scheduler=self.ddimsch, verbose=False,)
 
                 volume_xr_sample_hidden = self.forward_volume(image2d=figure_xr_sample_hidden, cameras=view_hidden, n_views=[1])
 
@@ -405,39 +305,17 @@ class DXRLightningModule(LightningModule):
             zeros = torch.zeros_like(image2d)
             viz2d = torch.cat(
                 [
-                    torch.cat(
-                        [
-                            image2d,
-                            volume_xr_hidden_inverse[..., self.vol_shape // 2, :],
-                            figure_xr_hidden_inverse_random,
-                            figure_xr_hidden_inverse_hidden,
-                            image3d[..., self.vol_shape // 2, :],
-                            figure_ct_random,
-                            figure_ct_hidden,
-                        ],
-                        dim=-2,
-                    ).transpose(2, 3),
-                    torch.cat(
-                        [
-                            zeros,
-                            volume_xr_sample_hidden[..., self.vol_shape // 2, :],
-                            figure_xr_sample_hidden_random,
-                            figure_xr_sample_hidden_hidden,
-                            volume_ct_hidden_inverse[..., self.vol_shape // 2, :],
-                            figure_ct_hidden_inverse_random,
-                            figure_ct_hidden_inverse_hidden,
-                        ],
-                        dim=-2,
-                    ).transpose(2, 3),
+                    torch.cat([image2d, volume_xr_hidden_inverse[..., self.vol_shape // 2, :], figure_xr_hidden_inverse_random, figure_xr_hidden_inverse_hidden, image3d[..., self.vol_shape // 2, :], figure_ct_random, figure_ct_hidden,], dim=-2,).transpose(2, 3),
+                    torch.cat([zeros, volume_xr_sample_hidden[..., self.vol_shape // 2, :], figure_xr_sample_hidden_random, figure_xr_sample_hidden_hidden, volume_ct_hidden_inverse[..., self.vol_shape // 2, :], figure_ct_hidden_inverse_random, figure_ct_hidden_inverse_hidden,], dim=-2,).transpose(
+                        2, 3
+                    ),
                 ],
                 dim=-2,
             )
             tensorboard = self.logger.experiment
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
             tensorboard.add_image(
-                f"{stage}_df_samples",
-                grid2d,
-                self.current_epoch * self.batch_size + batch_idx,
+                f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,
             )
 
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss
@@ -456,33 +334,20 @@ class DXRLightningModule(LightningModule):
     def on_train_epoch_end(self):
         loss = torch.stack(self.train_step_outputs).mean()
         self.log(
-            f"train_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"train_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.train_step_outputs.clear()  # free memory
 
     def on_validation_epoch_end(self):
         loss = torch.stack(self.validation_step_outputs).mean()
         self.log(
-            f"validation_loss_epoch",
-            loss,
-            on_step=False,
-            prog_bar=True,
-            logger=True,
-            sync_dist=True,
+            f"validation_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
         )
         self.validation_step_outputs.clear()  # free memory
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [
-                {"params": self.inv_renderer.parameters()},
-                {"params": self.unet2d_model.parameters()},
-            ],  # Add diffusion model, remove lpips model
+            [{"params": self.inv_renderer.parameters()}, {"params": self.unet2d_model.parameters()},],  # Add diffusion model, remove lpips model
             lr=self.lr,
             betas=(0.9, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
@@ -527,10 +392,7 @@ if __name__ == "__main__":
     parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
     parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
     parser.add_argument(
-        "--prediction_type",
-        type=str,
-        default="sample",
-        help="prediction_type for network",
+        "--prediction_type", type=str, default="sample", help="prediction_type for network",
     )
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
 
@@ -579,26 +441,11 @@ if __name__ == "__main__":
     # Create data module
     train_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
@@ -632,26 +479,11 @@ if __name__ == "__main__":
 
     val_image3d_folders = [
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",
-        ),
-        os.path.join(
-            hparams.datadir,
-            "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",
-        ),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
