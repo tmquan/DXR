@@ -33,12 +33,20 @@ from pytorch_lightning import LightningDataModule
 
 
 class UnpairedDataset(CacheDataset, Randomizable):
-    def __init__(self, keys: Sequence, data: Sequence, transform: Optional[Callable] = None, length: Optional[Callable] = None, batch_size: int = 32,) -> None:
+    def __init__(
+        self, keys: Sequence, 
+        data: Sequence, 
+        transform: Optional[Callable] = None, 
+        length: Optional[Callable] = None, 
+        batch_size: int = 32,
+        is_training: bool=True,
+    ) -> None:
         self.keys = keys
         self.data = data
         self.length = length
         self.batch_size = batch_size
         self.transform = transform
+        self.is_training = is_training
 
     def __len__(self) -> int:
         if self.length is None:
@@ -50,8 +58,11 @@ class UnpairedDataset(CacheDataset, Randomizable):
         data = {}
         self.R.seed(index)
         for key, dataset in zip(self.keys, self.data):
-            rand_idx = self.R.randint(0, len(dataset))
-            data[key] = dataset[rand_idx]
+            if self.is_training:
+                rand_idx = self.R.randint(0, len(dataset))
+                data[key] = dataset[rand_idx]
+            else:
+                data[key] = dataset[index]
 
         if self.transform is not None:
             data = apply_transform(self.transform, data)
@@ -164,7 +175,7 @@ class UnpairedDataModule(LightningDataModule):
                 # RandAffined(keys=["image3d"], rotate_range=None, shear_range=None, translate_range=20, scale_range=None),
                 # CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=lambda x: x>0, margin=0),
                 # CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=lambda x: x>0, margin=0),
-                Zoomd(keys=["image3d"], zoom=0.9, padding_mode="constant", mode=["area"]),
+                Zoomd(keys=["image2d"], zoom=0.9, padding_mode="constant", mode=["area"]),
                 Resized(keys=["image3d"], spatial_size=self.vol_shape, size_mode="longest", mode=["trilinear"], align_corners=True,),
                 Resized(keys=["image2d"], spatial_size=self.img_shape, size_mode="longest", mode=["area"],),
                 DivisiblePadd(keys=["image3d"], k=self.vol_shape, mode="constant", constant_values=0,),
@@ -173,9 +184,21 @@ class UnpairedDataModule(LightningDataModule):
             ]
         )
 
-        self.train_datasets = UnpairedDataset(keys=["image3d", "image2d"], data=[self.train_image3d_files, self.train_image2d_files], transform=self.train_transforms, length=self.train_samples, batch_size=self.batch_size,)
+        self.train_datasets = UnpairedDataset(
+            keys=["image3d", "image2d"], 
+            data=[self.train_image3d_files, self.train_image2d_files], 
+            transform=self.train_transforms, 
+            length=self.train_samples, 
+            batch_size=self.batch_size,
+            is_training=True,
+        )
 
-        self.train_loader = DataLoader(self.train_datasets, batch_size=self.batch_size, num_workers=48, collate_fn=list_data_collate, shuffle=True,)
+        self.train_loader = DataLoader(
+            self.train_datasets, 
+            batch_size=self.batch_size, 
+            num_workers=48, 
+            collate_fn=list_data_collate, shuffle=True,
+        )
         return self.train_loader
 
     def val_dataloader(self):
@@ -213,7 +236,7 @@ class UnpairedDataModule(LightningDataModule):
                 ),
                 CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=(lambda x: x > 0), margin=0,),
                 CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=(lambda x: x > 0), margin=0,),
-                Zoomd(keys=["image3d"], zoom=0.9, padding_mode="constant", mode=["area"]),
+                Zoomd(keys=["image2d"], zoom=0.9, padding_mode="constant", mode=["area"]),
                 Resized(keys=["image3d"], spatial_size=self.vol_shape, size_mode="longest", mode=["trilinear"], align_corners=True,),
                 Resized(keys=["image2d"], spatial_size=self.img_shape, size_mode="longest", mode=["area"],),
                 DivisiblePadd(keys=["image3d"], k=self.vol_shape, mode="constant", constant_values=0,),
@@ -222,10 +245,85 @@ class UnpairedDataModule(LightningDataModule):
             ]
         )
 
-        self.val_datasets = UnpairedDataset(keys=["image3d", "image2d"], data=[self.val_image3d_files, self.val_image2d_files], transform=self.val_transforms, length=self.val_samples, batch_size=self.batch_size,)
+        self.val_datasets = UnpairedDataset(
+            keys=["image3d", "image2d"], 
+            data=[self.val_image3d_files, self.val_image2d_files], 
+            transform=self.val_transforms, 
+            length=self.val_samples, 
+            batch_size=self.batch_size,
+            is_training=True,
+        )
 
-        self.val_loader = DataLoader(self.val_datasets, batch_size=self.batch_size, num_workers=16, collate_fn=list_data_collate, shuffle=True,)
+        self.val_loader = DataLoader(
+            self.val_datasets, 
+            batch_size=self.batch_size, 
+            num_workers=16, 
+            collate_fn=list_data_collate, 
+            shuffle=True,
+        )
         return self.val_loader
+    
+    def test_dataloader(self):
+        self.test_transforms = Compose(
+            [
+                LoadImaged(keys=["image3d", "image2d"]),
+                AddChanneld(keys=["image3d", "image2d"],),
+                Spacingd(keys=["image3d"], pixdim=(1.0, 1.0, 1.0), mode=["bilinear"], align_corners=True,),
+                # Rotate90d(keys=["image2d"], k=3),
+                # RandFlipd(keys=["image2d"], prob=1.0, spatial_axis=1), #Right cardio
+                OneOf(
+                    [
+                        Orientationd(keys=("image3d"), axcodes="ASL"),
+                        # Orientationd(keys=('image3d'), axcodes="ARI"),
+                        # Orientationd(keys=('image3d'), axcodes="PRI"),
+                        # Orientationd(keys=('image3d'), axcodes="ALI"),
+                        # Orientationd(keys=('image3d'), axcodes="PLI"),
+                        # Orientationd(keys=["image3d"], axcodes="LAI"),
+                        # Orientationd(keys=["image3d"], axcodes="RAI"),
+                        # Orientationd(keys=["image3d"], axcodes="LPI"),
+                        # Orientationd(keys=["image3d"], axcodes="RPI"),
+                    ],
+                ),
+                ScaleIntensityd(keys=["image2d"], minv=0.0, maxv=1.0,),
+                HistogramNormalized(keys=["image2d"], min=0.0, max=1.0,),
+                OneOf(
+                    [
+                        # ScaleIntensityRanged(keys=["image3d"], clip=True,  # CTXR range
+                        #         a_min=-200,
+                        #         a_max=1500,
+                        #         b_min=0.0,
+                        #         b_max=1.0),
+                        ScaleIntensityRanged(keys=["image3d"], clip=True, a_min=-500, a_max=3071, b_min=0.0, b_max=1.0,),  # Full range  # -200,  # 1500,
+                    ]
+                ),
+                CropForegroundd(keys=["image3d"], source_key="image3d", select_fn=(lambda x: x > 0), margin=0,),
+                CropForegroundd(keys=["image2d"], source_key="image2d", select_fn=(lambda x: x > 0), margin=0,),
+                Zoomd(keys=["image2d"], zoom=0.9, padding_mode="constant", mode=["area"]),
+                Resized(keys=["image3d"], spatial_size=self.vol_shape, size_mode="longest", mode=["trilinear"], align_corners=True,),
+                Resized(keys=["image2d"], spatial_size=self.img_shape, size_mode="longest", mode=["area"],),
+                DivisiblePadd(keys=["image3d"], k=self.vol_shape, mode="constant", constant_values=0,),
+                DivisiblePadd(keys=["image2d"], k=self.img_shape, mode="constant", constant_values=0,),
+                ToTensord(keys=["image3d", "image2d"],),
+            ]
+        )
+
+        self.test_datasets = UnpairedDataset(
+            keys=["image3d", "image2d"], 
+            data=[self.test_image3d_files, self.test_image2d_files], 
+            transform=self.test_transforms, 
+            length=self.test_samples, 
+            batch_size=self.batch_size,
+            is_training=False,
+        )
+
+        self.test_loader = DataLoader(
+            self.test_datasets, 
+            batch_size=self.batch_size, 
+            num_workers=16, 
+            collate_fn=list_data_collate, 
+            shuffle=False,
+        )
+        return self.test_loader
 
 
 if __name__ == "__main__":

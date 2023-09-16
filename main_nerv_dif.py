@@ -24,6 +24,8 @@ from lightning.pytorch.callbacks import StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+from torchmetrics.image import PeakSignalNoiseRatio
+from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from argparse import ArgumentParser
@@ -35,11 +37,10 @@ from pytorch3d.renderer.cameras import (
     look_at_view_transform,
 )
 
-from monai.networks import normal_init, icnr_init
-
 from generative.inferers import DiffusionInferer
 from generative.networks.nets import DiffusionModelUNet
-from generative.networks.schedulers import DDPMScheduler, DDIMScheduler
+from generative.networks.schedulers import DDPMScheduler
+from generative.networks.schedulers import DDIMScheduler
 
 from datamodule import UnpairedDataModule
 from dvr.renderer import DirectVolumeFrontToBackRenderer
@@ -67,19 +68,6 @@ def make_cameras_dea(dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor,
         return FoVOrthographicCameras(R=R, T=T, znear=znear, zfar=zfar).to(_device)
     return FoVPerspectiveCameras(R=R, T=T, fov=fov, znear=znear, zfar=zfar).to(_device)
 
-def constant_init(m, val=0, bias=0):
-    cname = m.__class__.__name__
-
-    if getattr(m, "weight", None) is not None and (cname.find("Conv") != -1 or cname.find("Linear") != -1):
-        nn.init.constant_(m.weight.data, val)
-        if getattr(m, "bias", None) is not None:
-            nn.init.constant_(m.bias.data, 0.0)
-
-    elif cname.find("BatchNorm") != -1:
-        nn.init.constant_(m.weight.data, val)
-        nn.init.constant_(m.bias.data, 0)
-
-
 
 class DXRLightningModule(LightningModule):
     def __init__(self, hparams, **kwargs):
@@ -91,6 +79,7 @@ class DXRLightningModule(LightningModule):
         self.strict = hparams.strict
         self.img_shape = hparams.img_shape
         self.vol_shape = hparams.vol_shape
+        self.fov_depth = hparams.fov_depth
         self.alpha = hparams.alpha
         self.gamma = hparams.gamma
         self.delta = hparams.delta
@@ -124,12 +113,12 @@ class DXRLightningModule(LightningModule):
             out_channels=self.sh ** 2 if self.sh > 0 else 1, 
             vol_shape=self.vol_shape, 
             img_shape=self.img_shape, 
-            n_pts_per_ray=self.n_pts_per_ray, 
+            fov_depth=self.fov_depth, 
             sh=self.sh, 
             pe=self.pe, 
             backbone=self.backbone,
         )
-        
+
         self.unet2d_model = DiffusionModelUNet(
             spatial_dims=2, 
             in_channels=1, 
@@ -141,10 +130,6 @@ class DXRLightningModule(LightningModule):
             with_conditioning=True, 
             cross_attention_dim=12, # Condition with straight/hidden view  # flatR | flatT
         )
-        
-        # initialize both networks
-        self.inv_renderer.apply(normal_init)
-        self.unet2d_model.apply(normal_init)
         
         self.ddpmsch = DDPMScheduler(
             num_train_timesteps=self.timesteps, 
@@ -163,7 +148,7 @@ class DXRLightningModule(LightningModule):
         )
         self.ddimsch.set_timesteps(num_inference_steps=100)
         self.inferer = DiffusionInferer(scheduler=self.ddimsch)
-
+        
         if self.ckpt:
             checkpoint = torch.load(self.ckpt, map_location=torch.device("cpu"))["state_dict"]
             state_dict = {k: v for k, v in checkpoint.items() if k in self.state_dict()}
@@ -175,8 +160,15 @@ class DXRLightningModule(LightningModule):
         if self.lpips:
             self.lpips_ = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
 
+        self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
+        self.psnr_outputs = []
+        self.ssim_outputs = []
+        
     def forward_screen(self, image3d, cameras):
-        return self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) * 2.0 - 1.0
+        screen = self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) 
+        screen = screen * 2.0 - 1.0
+        return screen
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None):
         _device = image2d.device
@@ -194,7 +186,7 @@ class DXRLightningModule(LightningModule):
         viewpts = torch.cat([cameras.R.reshape(B, 1, -1), cameras.T.reshape(B, 1, -1),], dim=-1,)
         results = self.unet2d_model(x=image2d, context=viewpts, timesteps=timesteps,)
         return results
-
+    
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         image3d = batch["image3d"] * 2.0 - 1.0
         image2d = batch["image2d"] * 2.0 - 1.0
@@ -205,13 +197,13 @@ class DXRLightningModule(LightningModule):
         dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
         azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
-        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=20, znear=4, zfar=8)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=18, znear=4, zfar=8)
 
         dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_hidden = torch.zeros(self.batch_size, device=_device)
         azim_hidden = torch.zeros(self.batch_size, device=_device)
-        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=20, znear=4, zfar=8)
-
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=18, znear=4, zfar=8)
+        
         # Construct the samples in 2D
         figure_xr_hidden = image2d
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
@@ -219,31 +211,45 @@ class DXRLightningModule(LightningModule):
 
         # Reconstruct the Encoder-Decoder
         volume_dx_inverse = self.forward_volume(
-            image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
-            cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
-            n_views=[1, 1] * batchsz, 
-            timesteps=None,
-        )
-
-        (volume_xr_hidden_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+            n_views=[1, 1, 1] * batchsz,)
+        (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+        # volume_dx_inverse = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
+        #     n_views=[1, 1] * batchsz,)
+        # (volume_xr_hidden_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
 
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
+        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
+        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden)
         figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random)
         figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden)
 
-        im2d_loss_inv = self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden) \
-                      + self.l1loss(figure_ct_hidden_inverse_random, figure_ct_random) \
-                      + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden)
+        if self.sh > 0:
+            volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
+            volume_ct_random_inverse = volume_ct_random_inverse.sum(dim=1, keepdim=True)
+            volume_ct_hidden_inverse = volume_ct_hidden_inverse.sum(dim=1, keepdim=True)
+
+        im2d_loss_inv = (
+            self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
+            + self.l1loss(figure_ct_random_inverse_random, figure_ct_random)
+            + self.l1loss(figure_ct_random_inverse_hidden, figure_ct_hidden)
+            + self.l1loss(figure_ct_hidden_inverse_random, figure_ct_random) * self.omega
+            + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
+        )
 
         if self.lpips:
             figure_xr_hidden_inverse_random = torch.nan_to_num(figure_xr_hidden_inverse_random, 0, 1, -1)
             lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),)
             self.log(f"{stage}_lpip_loss", lpips_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
-            im2d_loss_inv += lpips_loss * self.omega
+            im2d_loss_inv += lpips_loss
 
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d)
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) #+ self.l1loss(volume_ct_random_inverse, image3d)
 
+        
         # Diffusion step: 2 kinds of blending
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
 
@@ -311,12 +317,12 @@ class DXRLightningModule(LightningModule):
         if self.lpips:
             figure_xr_hidden_output_random = torch.nan_to_num(figure_xr_hidden_output_random, 0, 1, -1)
             lpips_loss = self.lpips_(figure_xr_hidden_output_random.repeat(1, 3, 1, 1).clamp(-1, 1), figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),)
-            im2d_loss_dif += lpips_loss * self.omega * 2
+            im2d_loss_dif += lpips_loss * self.omega 
 
-        im3d_loss_dif = self.l1loss(volume_ct_hidden_output, volume_ct_target) * 2
+        im3d_loss_dif = self.l1loss(volume_ct_hidden_output, volume_ct_target) 
 
-        im2d_loss = 2 * im2d_loss_inv + im2d_loss_dif
-        im3d_loss = 2 * im3d_loss_inv + im3d_loss_dif
+        im2d_loss = im2d_loss_inv + im2d_loss_dif
+        im3d_loss = im3d_loss_inv + im3d_loss_dif
 
         # Log the final losses
         self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
@@ -378,23 +384,51 @@ class DXRLightningModule(LightningModule):
         self.validation_step_outputs.append(loss)
         return loss
 
+    def test_step(self, batch, batch_idx):
+        image3d = batch["image3d"] * 2.0 - 1.0
+        image2d = batch["image2d"] * 2.0 - 1.0
+        _device = batch["image3d"].device
+        batchsz = image2d.shape[0]
+
+        # Construct the random cameras, -1 and 1 are the same point in azimuths
+        dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
+        elev_hidden = torch.zeros(self.batch_size, device=_device)
+        azim_hidden = torch.zeros(self.batch_size, device=_device)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=18, znear=4, zfar=8)
+
+        # Construct the samples in 2D
+        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
+        figure_xr_hidden = image2d
+
+        # Reconstruct the Encoder-Decoder
+        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden)
+        psnr = self.psnr(volume_ct_hidden, image3d)
+        ssim = self.ssim(volume_ct_hidden, image3d)
+        self.psnr_outputs.append(psnr)
+        self.ssim_outputs.append(ssim)
+        
     def on_train_epoch_end(self):
         loss = torch.stack(self.train_step_outputs).mean()
-        self.log(
-            f"train_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
-        )
+        self.log(f"train_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,)
         self.train_step_outputs.clear()  # free memory
 
     def on_validation_epoch_end(self):
         loss = torch.stack(self.validation_step_outputs).mean()
-        self.log(
-            f"validation_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,
-        )
+        self.log(f"validation_loss_epoch", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True,)
         self.validation_step_outputs.clear()  # free memory
 
+    def on_test_epoch_end(self):
+        print(f"PSNR :{torch.stack(self.psnr_outputs).mean()}")
+        print(f"SSIM :{torch.stack(self.ssim_outputs).mean()}")
+        self.psnr_outputs.clear()
+        self.ssim_outputs.clear()
+        
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            [{"params": self.inv_renderer.parameters()}, {"params": self.unet2d_model.parameters()},],  # Add diffusion model, remove lpips model
+            [
+                {"params": self.inv_renderer.parameters()},
+                {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove lpips model
+            ],
             lr=self.lr,
             betas=(0.5, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
@@ -417,12 +451,14 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
     parser.add_argument("--img_shape", type=int, default=256, help="spatial size of the tensor")
     parser.add_argument("--vol_shape", type=int, default=256, help="spatial size of the tensor")
+    parser.add_argument("--fov_depth", type=int, default=256, help="spatial size of the tensor")
     parser.add_argument("--epochs", type=int, default=301, help="number of epochs")
     parser.add_argument("--train_samples", type=int, default=1000, help="training samples")
     parser.add_argument("--val_samples", type=int, default=400, help="validation samples")
     parser.add_argument("--test_samples", type=int, default=400, help="test samples")
     parser.add_argument("--timesteps", type=int, default=180, help="timesteps for diffusion")
     parser.add_argument("--amp", action="store_true", help="train with mixed precision or not")
+    parser.add_argument("--test", action="store_true", help="train with mixed precision or not")
     parser.add_argument("--lpips", action="store_true", help="train with lpips xray ct random")
     parser.add_argument("--strict", action="store_true", help="checkpoint loading")
 
@@ -438,9 +474,7 @@ if __name__ == "__main__":
     parser.add_argument("--datadir", type=str, default="data", help="data directory")
     parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
     parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
-    parser.add_argument(
-        "--prediction_type", type=str, default="sample", help="prediction_type for network",
-    )
+    parser.add_argument("--prediction_type", type=str, default="sample", help="prediction_type for network",)
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
 
     # parser = Trainer.add_argparse_args(parser)
@@ -482,7 +516,7 @@ if __name__ == "__main__":
         accumulate_grad_batches=4,
         strategy=hparams.strategy,  # "auto", #"ddp_find_unused_parameters_true",
         precision=16 if hparams.amp else 32,
-        profiler="advanced",
+        profiler="simple",
     )
 
     # Create data module
@@ -498,14 +532,6 @@ if __name__ == "__main__":
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/train/images'),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/val/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/train/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/train/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/val/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/val/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/test/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/test/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/train/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/test/images/'),
     ]
 
     train_label3d_folders = []
@@ -516,34 +542,24 @@ if __name__ == "__main__":
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Montgomery/processed/images/'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/VinDr/v1/processed/train/images/"),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/VinDr/v1/processed/test/images/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/T62020/20200501/raw/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/T62021/20211101/raw/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/VinDr/v1/processed/train/images/'),
-        # # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/VinDr/v1/processed/test/images/'),
     ]
 
     train_label2d_folders = []
 
     val_image3d_folders = [
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/NSCLC/processed/train/images"),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-0",),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-1",),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-2",),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-3",),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MOSMED/processed/train/images/CT-4",),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Imagenglab/processed/train/images'),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
-        os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/train/images"),
+        # os.path.join(hparams.datadir, "ChestXRLungSegmentation/MELA2022/raw/val/images"),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/train/images'),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/AMOS2022/raw/val/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/train/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/train/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/val/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/val/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2019/raw/test/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/Verse2020/raw/test/rawdata/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/train/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/UWSpine/processed/test/images/'),
+        os.path.join(hparams.datadir, 'ChestXRLungSegmentation/TCIA/CT-Covid-19-2020/images'),
+        os.path.join(hparams.datadir, 'ChestXRLungSegmentation/TCIA/CT-Covid-19-2021/images'),
     ]
 
     val_image2d_folders = [
@@ -552,10 +568,6 @@ if __name__ == "__main__":
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/Montgomery/processed/images/'),
         # os.path.join(hparams.datadir, 'ChestXRLungSegmentation/VinDr/v1/processed/train/images/'),
         os.path.join(hparams.datadir, "ChestXRLungSegmentation/VinDr/v1/processed/test/images/"),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/T62020/20200501/raw/images'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/T62021/20211101/raw/images'),
-        # # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/VinDr/v1/processed/train/images/'),
-        # os.path.join(hparams.datadir, 'SpineXRVertSegmentation/VinDr/v1/processed/test/images/'),
     ]
 
     test_image3d_folders = val_image3d_folders
@@ -582,17 +594,22 @@ if __name__ == "__main__":
     #############################################
 
     model = DXRLightningModule(hparams=hparams)
-    # model = model.load_from_checkpoint(hparams.ckpt, strict=False) if hparams.ckpt is not None else model
-    # compiled_model = torch.compile(model, mode="reduce-overhead")
-    trainer.fit(
-        model,
-        # compiled_model,
-        train_dataloaders=datamodule.train_dataloader(),
-        val_dataloaders=datamodule.val_dataloader(),
-        # datamodule=datamodule,
-        ckpt_path=hparams.ckpt if hparams.ckpt is not None and hparams.strict else None,  # "some/path/to/my_checkpoint.ckpt"
-    )
+    
+    if hparams.test:
+        trainer.test(
+            model,
+            dataloaders=datamodule.test_dataloader(),
+            ckpt_path=hparams.ckpt
+        )
 
-    # test
+    else:
+        trainer.fit(
+            model,
+            # compiled_model,
+            train_dataloaders=datamodule.train_dataloader(),
+            val_dataloaders=datamodule.val_dataloader(),
+            # datamodule=datamodule,
+            ckpt_path=hparams.ckpt if hparams.ckpt is not None and hparams.strict else None,  # "some/path/to/my_checkpoint.ckpt"
+        )
 
     # serve

@@ -35,10 +35,7 @@ class DirectVolumeRenderer(nn.Module):
     def forward(self, image3d, cameras, opacity=None, norm_type="standardized", scaling_factor=0.1, is_grayscale=True, return_bundle=False) -> torch.Tensor:
         features = image3d.repeat(1, 3, 1, 1, 1) if image3d.shape[1] == 1 else image3d
         if opacity is None:
-            if image3d.shape[1] != 1:
-                densities = torch.ones_like(image3d[:, [0]]) * scaling_factor
-            else:
-                densities = torch.ones_like(image3d) * scaling_factor
+            densities = torch.ones_like(image3d[:, [0]]) * scaling_factor
         else:
             densities = opacity * scaling_factor
         # print(image3d.shape, densities.shape)
