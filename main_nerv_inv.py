@@ -135,7 +135,7 @@ class DXRLightningModule(LightningModule):
         screen = screen * 2.0 - 1.0
         return screen
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections

@@ -149,11 +149,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-        # clarity = F.interpolate(
-        #     clarity, 
-        #     size=[self.vol_shape, self.vol_shape, self.vol_shape],
-        #     mode="trilinear"
-        # )
+       
         
         if resample:
             z = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
@@ -178,7 +174,12 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 interp.append(value_)
 
             clarity = torch.cat(interp, dim=0)
-        
+        else:
+            clarity = F.interpolate(
+                clarity, 
+                size=[self.vol_shape, self.vol_shape, self.vol_shape],
+                mode="trilinear"
+            )
         # shcomps = self.density_net(
         #     x=clarity,
         #     context=viewpts,
