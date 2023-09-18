@@ -77,56 +77,56 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         #     cross_attention_dim=12,  # flatR | flatT
         # )
         
-        self.density_net = nn.Sequential(
-            Unet(
-                spatial_dims=3, 
-                in_channels=1 + (2 * 3 * self.pe), 
-                out_channels=1, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.BATCH, 
-                # dropout=0.5,
-            ),
-            # nn.Tanh(),
-        )
+        # self.density_net = nn.Sequential(
+        #     Unet(
+        #         spatial_dims=3, 
+        #         in_channels=1 + (2 * 3 * self.pe), 
+        #         out_channels=1, 
+        #         channels=backbones[backbone], 
+        #         strides=(2, 2, 2, 2, 2), 
+        #         num_res_units=2, 
+        #         kernel_size=3, 
+        #         up_kernel_size=3, 
+        #         act=("LeakyReLU", {"inplace": True}), 
+        #         norm=Norm.BATCH, 
+        #         dropout=0.5,
+        #     ),
+        #     # nn.Tanh(),
+        # )
 
-        self.mixture_net = nn.Sequential(
-            Unet(
-                spatial_dims=3, 
-                in_channels=2 + (2 * 3 * self.pe), 
-                out_channels=1, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.BATCH, 
-                # dropout=0.5,
-            ),
-            # nn.Tanh(),
-        )
+        # self.mixture_net = nn.Sequential(
+        #     Unet(
+        #         spatial_dims=3, 
+        #         in_channels=2 + (2 * 3 * self.pe), 
+        #         out_channels=1, 
+        #         channels=backbones[backbone], 
+        #         strides=(2, 2, 2, 2, 2), 
+        #         num_res_units=2, 
+        #         kernel_size=3, 
+        #         up_kernel_size=3, 
+        #         act=("LeakyReLU", {"inplace": True}), 
+        #         norm=Norm.BATCH, 
+        #         dropout=0.5,
+        #     ),
+        #     # nn.Tanh(),
+        # )
 
-        self.refiner_net = nn.Sequential(
-            Unet(
-                spatial_dims=3, 
-                in_channels=3 + (2 * 3 * self.pe), 
-                out_channels=self.out_channels, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.BATCH, 
-                dropout=0.5
-            ),
-            # nn.Tanh(),
-        )
+        # self.refiner_net = nn.Sequential(
+        #     Unet(
+        #         spatial_dims=3, 
+        #         in_channels=3 + (2 * 3 * self.pe), 
+        #         out_channels=self.out_channels, 
+        #         channels=backbones[backbone], 
+        #         strides=(2, 2, 2, 2, 2), 
+        #         num_res_units=2, 
+        #         kernel_size=3, 
+        #         up_kernel_size=3, 
+        #         act=("LeakyReLU", {"inplace": True}), 
+        #         norm=Norm.BATCH, 
+        #         dropout=0.5
+        #     ),
+        #     # nn.Tanh(),
+        # )
 
     def forward(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None):
         _device = image2d.device
@@ -149,7 +149,6 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-       
         
         if resample:
             z = torch.linspace(-1.0, 1.0, steps=self.vol_shape, device=_device)
@@ -180,21 +179,23 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 size=[self.vol_shape, self.vol_shape, self.vol_shape],
                 mode="trilinear"
             )
+            
+        return clarity
         # shcomps = self.density_net(
         #     x=clarity,
         #     context=viewpts,
         #     timesteps=timesteps,
         # ) 
         
-        density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
-        mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
-        shcoeff = self.refiner_net(torch.cat([clarity, density, mixture], dim=1))  # shcoeff = torch.add(shcoeff, clarity)
-        shcomps = shcoeff
+        # density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
+        # mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
+        # shcoeff = self.refiner_net(torch.cat([clarity, density, mixture], dim=1))  # shcoeff = torch.add(shcoeff, clarity)
+        # shcomps = shcoeff
 
-        volumes = []
-        for idx, n_view in enumerate(n_views):
-            volume = shcomps[[idx]].repeat(n_view, 1, 1, 1, 1)
-            volumes.append(volume)
-        volumes = torch.cat(volumes, dim=0)
+        # volumes = []
+        # for idx, n_view in enumerate(n_views):
+        #     volume = shcomps[[idx]].repeat(n_view, 1, 1, 1, 1)
+        #     volumes.append(volume)
+        # volumes = torch.cat(volumes, dim=0)
         
-        return volumes
+        # return volumes

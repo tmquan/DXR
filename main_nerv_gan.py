@@ -143,11 +143,17 @@ class DXRLightningModule(LightningModule):
                 dropout=0.2
             )
             self.adv_loss = PatchAdversarialLoss(reduction="sum", criterion="hinge")
-            # self.perc_loss = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
-            self.perc_loss = PerceptualLoss(
+            # self.p2d_loss = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
+            self.p2d_loss = PerceptualLoss(
                 spatial_dims=2, 
                 network_type="radimagenet_resnet50", 
                 is_fake_3d=False, 
+                pretrained=True
+            )
+            self.p3d_loss = PerceptualLoss(
+                spatial_dims=3, 
+                network_type="radimagenet_resnet50", 
+                is_fake_3d=True, 
                 pretrained=True
             )
             
@@ -171,7 +177,7 @@ class DXRLightningModule(LightningModule):
         screen = screen * 2.0 - 1.0
         return screen
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
@@ -242,7 +248,7 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) #+ self.l1loss(volume_ct_random_inverse, image3d)
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -289,18 +295,15 @@ class DXRLightningModule(LightningModule):
 
         # adversarial loss is binary cross-entropy
         disc_fakes, features_fakes = self.discriminator(figure_xr_hidden_inverse_random)
-        loss_gen = self.adv_loss(disc_fakes, target_is_real=True, for_discriminator=False)
-        
         disc_reals, features_reals = self.discriminator(figure_ct_random)
-        loss_feat = self.feat_loss(features_fakes, features_reals, 1)
-        # loss_perc = self.perc_loss(figure_xr_hidden_inverse_random, target=figure_ct_random)
-        loss_perc = self.perc_loss(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), 
-                                   figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),)
-        # loss_g = loss_gen + loss_perc + loss_feat
-        loss_g = loss_gen + loss_feat + loss_perc * self.lamda
         
+        loss_g = self.adv_loss(disc_fakes, target_is_real=True, for_discriminator=False)
+        loss_feat = self.feat_loss(features_fakes, features_reals, 1)
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
+                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
+
         self.log("loss_g", loss_g, prog_bar=True)
-        self.manual_backward(loss_g + loss)
+        self.manual_backward(loss_g + loss_feat + loss_perc * self.lamda + loss)
         optimizer_g.step()
         optimizer_g.zero_grad()
         self.untoggle_optimizer(optimizer_g)
@@ -320,7 +323,6 @@ class DXRLightningModule(LightningModule):
         optimizer_d.step()
         optimizer_d.zero_grad()
         self.untoggle_optimizer(optimizer_d)
-
 
         self.train_step_outputs.append(loss)
         return loss
@@ -379,7 +381,7 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) #+ self.l1loss(volume_ct_random_inverse, image3d)
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -472,7 +474,7 @@ class DXRLightningModule(LightningModule):
                 # {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove gan model
             ],
             lr=self.lr,
-            betas=(0.5, 0.999)
+            betas=(0.9, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
         scheduler_g = torch.optim.lr_scheduler.MultiStepLR(optimizer_g, milestones=[100, 200], gamma=0.1)
@@ -481,8 +483,8 @@ class DXRLightningModule(LightningModule):
             [
                 {"params": self.discriminator.parameters()},
             ],
-            lr=self.lr*2,
-            betas=(0.5, 0.999)
+            lr=self.lr,
+            betas=(0.9, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
         scheduler_d = torch.optim.lr_scheduler.MultiStepLR(optimizer_d, milestones=[100, 200], gamma=0.1)

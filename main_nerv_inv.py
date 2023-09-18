@@ -202,7 +202,7 @@ class DXRLightningModule(LightningModule):
             self.log(f"{stage}_lpip_loss", lpips_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
             im2d_loss_inv += lpips_loss
 
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) #+ self.l1loss(volume_ct_random_inverse, image3d)
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
