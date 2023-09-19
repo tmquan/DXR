@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 import resource
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
-print(rlimit)
+# print(rlimit)
 resource.setrlimit(resource.RLIMIT_NOFILE, (65536, rlimit[1]))
 
 import torch

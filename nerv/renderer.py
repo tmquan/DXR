@@ -91,25 +91,25 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 norm=Norm.BATCH, 
                 dropout=0.5,
             ),
-            # nn.Tanh(),
+            nn.Tanh(),
         )
                 
-        # self.density_net = nn.Sequential(
-        #     Unet(
-        #         spatial_dims=3, 
-        #         in_channels=1 + (2 * 3 * self.pe), 
-        #         out_channels=1, 
-        #         channels=backbones[backbone], 
-        #         strides=(2, 2, 2, 2, 2), 
-        #         num_res_units=2, 
-        #         kernel_size=3, 
-        #         up_kernel_size=3, 
-        #         act=("LeakyReLU", {"inplace": True}), 
-        #         norm=Norm.BATCH, 
-        #         dropout=0.5,
-        #     ),
-        #     # nn.Tanh(),
-        # )
+        self.density_net = nn.Sequential(
+            Unet(
+                spatial_dims=3, 
+                in_channels=1 + (2 * 3 * self.pe), 
+                out_channels=1, 
+                channels=backbones[backbone], 
+                strides=(2, 2, 2, 2, 2), 
+                num_res_units=2, 
+                kernel_size=3, 
+                up_kernel_size=3, 
+                act=("LeakyReLU", {"inplace": True}), 
+                norm=Norm.BATCH, 
+                dropout=0.5,
+            ),
+            nn.Tanh(),
+        )
         
 
         # self.mixture_net = nn.Sequential(
@@ -207,6 +207,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         
         density = self.density_net(clarity)
         shcomps = clarity + density
+        # shcomps = density
         
         # density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
         # mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
