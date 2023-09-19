@@ -138,7 +138,7 @@ class DXRLightningModule(LightningModule):
                 out_channels=8,
                 activation="LEAKYRELU",
                 minimum_size_im=self.img_shape,
-                norm="INSTANCE",
+                norm="BATCH",
                 kernel_size=3, 
                 dropout=0.2
             )
@@ -150,12 +150,12 @@ class DXRLightningModule(LightningModule):
                 is_fake_3d=False, 
                 pretrained=True
             )
-            # self.p3d_loss = PerceptualLoss(
-            #     spatial_dims=3, 
-            #     network_type="radimagenet_resnet50", 
-            #     is_fake_3d=True, fake_3d_ratio=0.2,
-            #     pretrained=True
-            # )
+            self.p3d_loss = PerceptualLoss(
+                spatial_dims=3, 
+                network_type="radimagenet_resnet50", 
+                is_fake_3d=True, fake_3d_ratio=0.1,
+                pretrained=True
+            )
             
         self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
@@ -300,7 +300,7 @@ class DXRLightningModule(LightningModule):
         loss_g = self.adv_loss(disc_fakes, target_is_real=True, for_discriminator=False)
         loss_feat = self.feat_loss(features_fakes, features_reals, 1)
         loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                #   + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
+                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
 
         self.log("loss_g", loss_g, prog_bar=True)
         self.manual_backward(loss_g + loss_feat + loss_perc * self.lamda + loss)

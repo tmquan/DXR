@@ -205,7 +205,8 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
         #     timesteps=timesteps,
         # ) 
         
-        shcomps = self.density_net(clarity)
+        density = self.density_net(clarity)
+        shcomps = clarity + density
         
         # density = self.density_net(torch.cat([clarity], dim=1))  # density = torch.add(density, clarity)
         # mixture = self.mixture_net(torch.cat([clarity, density], dim=1))  # mixture = torch.add(mixture, clarity)
