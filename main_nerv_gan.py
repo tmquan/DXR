@@ -115,7 +115,8 @@ class DXRLightningModule(LightningModule):
             fov_depth=self.fov_depth, 
             sh=self.sh, 
             pe=self.pe, 
-            backbone=self.backbone,
+            backbone=self.backbone, 
+            fwd_renderer=self.fwd_renderer,
         )
 
         if self.ckpt:
@@ -138,7 +139,7 @@ class DXRLightningModule(LightningModule):
                 out_channels=8,
                 activation="LEAKYRELU",
                 minimum_size_im=self.img_shape,
-                norm="BATCH",
+                norm="INSTANCE",
                 kernel_size=3, 
                 dropout=0.2
             )
@@ -177,12 +178,17 @@ class DXRLightningModule(LightningModule):
         screen = screen * 2.0 - 1.0
         return screen
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results = self.inv_renderer(image2d, cameras, n_views, resample).view(-1, 1, self.vol_shape, self.vol_shape, self.vol_shape)
+        results = self.inv_renderer(image2d, cameras, n_views, resample)
+        # results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
+        #.view(-1, 1, self.vol_shape, self.vol_shape, self.vol_shape)
+        # if is_training:
+        #     return results, middles
         return results
+        
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         pass
@@ -217,11 +223,19 @@ class DXRLightningModule(LightningModule):
         optimizer_g.zero_grad()
         
         # Reconstruct the Encoder-Decoder
+        # volume_dx_inverse, \
+        # middle_dx_inverse = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+        #     n_views=[1, 1, 1] * batchsz,
+        #     is_training=True)
         volume_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-            n_views=[1, 1, 1] * batchsz,)
+            n_views=[1, 1, 1] * batchsz,
+            is_training=True)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+        # (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
         # volume_dx_inverse = self.forward_volume(
         #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
         #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
@@ -248,7 +262,13 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
+        # im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
+        #               + self.l1loss(volume_ct_random_inverse, image3d) \
+        #               + self.l1loss(middle_ct_hidden_inverse, image3d) \
+        #               + self.l1loss(middle_ct_random_inverse, image3d)
+        
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
+                      + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -299,8 +319,8 @@ class DXRLightningModule(LightningModule):
         
         loss_g = self.adv_loss(disc_fakes, target_is_real=True, for_discriminator=False)
         loss_feat = self.feat_loss(features_fakes, features_reals, 1)
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random*0.5+0.5, figure_ct_random*0.5+0.5) \
+                  + self.p3d_loss(volume_xr_hidden_inverse*0.5+0.5, image3d*0.5+0.5) \
 
         self.log("loss_g", loss_g, prog_bar=True)
         self.manual_backward(loss_g + loss_feat + loss_perc * self.lamda + loss)
@@ -474,7 +494,7 @@ class DXRLightningModule(LightningModule):
                 # {'params': self.unet2d_model.parameters()}, # Add diffusion model, remove gan model
             ],
             lr=self.lr,
-            betas=(0.9, 0.999)
+            betas=(0.5, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
         scheduler_g = torch.optim.lr_scheduler.MultiStepLR(optimizer_g, milestones=[100, 200], gamma=0.1)
@@ -484,7 +504,7 @@ class DXRLightningModule(LightningModule):
                 {"params": self.discriminator.parameters()},
             ],
             lr=self.lr,
-            betas=(0.9, 0.999)
+            betas=(0.5, 0.999)
             # self.parameters(), lr=self.lr, betas=(0.9, 0.999)
         )
         scheduler_d = torch.optim.lr_scheduler.MultiStepLR(optimizer_d, milestones=[100, 200], gamma=0.1)

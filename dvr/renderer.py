@@ -27,6 +27,7 @@ class DirectVolumeRenderer(nn.Module):
         self, image_width: int = 256, image_height: int = 256, n_pts_per_ray: int = 320, min_depth: float = 2.0, max_depth: float = 6.0, ndc_extent: float = 3.0, stratified_sampling: bool = False,
     ):
         super().__init__()
+        self.n_pts_per_ray = n_pts_per_ray
         self.raymarcher = EmissionAbsorptionRaymarcher()  # BackToFront Raymarcher
         self.raysampler = NDCMultinomialRaysampler(image_width=image_width, image_height=image_height, n_pts_per_ray=n_pts_per_ray, min_depth=min_depth, max_depth=max_depth, stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
@@ -40,7 +41,7 @@ class DirectVolumeRenderer(nn.Module):
             densities = opacity * scaling_factor
         # print(image3d.shape, densities.shape)
         shape = max(image3d.shape[1], image3d.shape[2])
-        volumes = Volumes(
+        self.volumes = Volumes(
             features=features,
             densities=densities,
             voxel_size=self.ndc_extent / shape,
@@ -48,7 +49,7 @@ class DirectVolumeRenderer(nn.Module):
         )
         # screen_RGBA, ray_bundles = self.renderer(cameras=cameras, volumes=volumes) #[...,:3]
         # rays_points = ray_bundle_to_ray_points(ray_bundles)
-        screen_RGBA, bundle = self.renderer(cameras=cameras, volumes=volumes)  # [...,:3]
+        screen_RGBA, bundle = self.renderer(cameras=cameras, volumes=self.volumes)  # [...,:3]
 
         screen_RGBA = screen_RGBA.permute(0, 3, 2, 1)  # 3 for NeRF
         if is_grayscale:
@@ -73,6 +74,7 @@ class DirectVolumeFrontToBackRenderer(DirectVolumeRenderer):
         self, image_width: int = 256, image_height: int = 256, n_pts_per_ray: int = 320, min_depth: float = 2.0, max_depth: float = 6.0, ndc_extent: float = 3.0, stratified_sampling: bool = False,
     ):
         super().__init__()
+        self.n_pts_per_ray = n_pts_per_ray
         self.raymarcher = EmissionAbsorptionFrontToBackRaymarcher()  # FrontToBack
         self.raysampler = NDCMultinomialRaysampler(image_width=image_width, image_height=image_height, n_pts_per_ray=n_pts_per_ray, min_depth=min_depth, max_depth=max_depth, stratified_sampling=stratified_sampling,)
         self.renderer = VolumeRenderer(raysampler=self.raysampler, raymarcher=self.raymarcher,)
