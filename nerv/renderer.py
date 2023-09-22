@@ -30,9 +30,6 @@ backbones = {
     "efficientnet-l2": (72, 104, 176, 480, 1376),
 }
 
-
-
-
 class NeRVFrontToBackInverseRenderer(nn.Module):
     def __init__(
         self,
@@ -68,24 +65,6 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             with_conditioning=True,
             cross_attention_dim=12,  # flatR | flatT
         )
-        
-        self.density_net = nn.Sequential(
-            Unet(
-                spatial_dims=3, 
-                in_channels=1 + (2 * 3 * self.pe), 
-                out_channels=1, 
-                channels=backbones[backbone], 
-                strides=(2, 2, 2, 2, 2), 
-                num_res_units=2, 
-                kernel_size=3, 
-                up_kernel_size=3, 
-                act=("LeakyReLU", {"inplace": True}), 
-                norm=Norm.INSTANCE, 
-                dropout=0.5,
-            ),
-            # nn.Tanh(),
-        )
-        
 
     def get_ray_points(self, cameras=None, viewers=None, vol_shape=(1, 256, 256, 256), shape=256):
         B = cameras.R.shape[0]
@@ -129,12 +108,10 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-        density = self.density_net(clarity)
-        
         if resample:
             # New methods
             points_3d = self.get_ray_points(cameras=cameras, viewers=self.fwd_renderer)
-            points_features = density.view(B, -1, 1).float() # B DHW 1
+            points_features = clarity.view(B, -1, 1).float() # B DHW 1
             volume_densities = torch.zeros((B, 1, self.vol_shape, self.vol_shape, self.vol_shape), device=_device)
             volume_features = torch.zeros((B, 1, self.vol_shape, self.vol_shape, self.vol_shape), device=_device)
             grid_sizes = torch.tensor([self.vol_shape, self.vol_shape, self.vol_shape], dtype=torch.int64, device=_device).expand(B, 3)
@@ -154,7 +131,7 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 splat,
             )
             
-            values = volume_features_.to(density.dtype)
+            values = volume_features_.to(clarity.dtype)
             scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
             interp = []
             for scene_, n_view in zip(scenes, n_views):
