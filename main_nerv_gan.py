@@ -158,8 +158,8 @@ class DXRLightningModule(LightningModule):
                 pretrained=True
             )
             
-        self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
+        self.psnr = PeakSignalNoiseRatio(data_range=(0, 1))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 1))
         self.psnr_outputs = []
         self.ssim_outputs = []
     
@@ -174,19 +174,19 @@ class DXRLightningModule(LightningModule):
         return GAN_Feat_loss
 
     def forward_screen(self, image3d, cameras):
-        screen = self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) 
-        screen = screen * 2.0 - 1.0
+        screen = self.fwd_renderer(image3d, cameras) 
+        screen = screen
         return screen
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None, is_training=False):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results = self.inv_renderer(image2d, cameras, n_views, resample)
-        # results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
-        #.view(-1, 1, self.vol_shape, self.vol_shape, self.vol_shape)
-        # if is_training:
-        #     return results, middles
+        # results = self.inv_renderer(image2d, cameras, n_views, resample)
+        results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
+        
+        if is_training:
+            return results, middles
         return results
         
 
@@ -194,8 +194,8 @@ class DXRLightningModule(LightningModule):
         pass
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -223,19 +223,19 @@ class DXRLightningModule(LightningModule):
         optimizer_g.zero_grad()
         
         # Reconstruct the Encoder-Decoder
-        # volume_dx_inverse, \
-        # middle_dx_inverse = self.forward_volume(
-        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-        #     n_views=[1, 1, 1] * batchsz,
-        #     is_training=True)
-        volume_dx_inverse = self.forward_volume(
+        volume_dx_inverse, \
+        middle_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1] * batchsz,
             is_training=True)
+        # volume_dx_inverse = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+        #     n_views=[1, 1, 1] * batchsz,
+        #     is_training=True)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
-        # (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
+        (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
         # volume_dx_inverse = self.forward_volume(
         #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
         #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
@@ -262,13 +262,13 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        # im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
-        #               + self.l1loss(volume_ct_random_inverse, image3d) \
-        #               + self.l1loss(middle_ct_hidden_inverse, image3d) \
-        #               + self.l1loss(middle_ct_random_inverse, image3d)
-        
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
-                      + self.l1loss(volume_ct_random_inverse, image3d)
+                      + self.l1loss(volume_ct_random_inverse, image3d) \
+                      + self.l1loss(middle_ct_hidden_inverse, image3d) \
+                      + self.l1loss(middle_ct_random_inverse, image3d)
+        
+        # im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
+        #               + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -307,7 +307,7 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0) 
             tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
@@ -319,8 +319,8 @@ class DXRLightningModule(LightningModule):
         
         loss_g = self.adv_loss(disc_fakes, target_is_real=True, for_discriminator=False)
         loss_feat = self.feat_loss(features_fakes, features_reals, 1)
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random*0.5+0.5, figure_ct_random*0.5+0.5) \
-                  + self.p3d_loss(volume_xr_hidden_inverse*0.5+0.5, image3d*0.5+0.5) \
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
+                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
 
         self.log("loss_g", loss_g, prog_bar=True)
         self.manual_backward(loss_g + loss_feat + loss_perc * self.lamda + loss)
@@ -348,8 +348,8 @@ class DXRLightningModule(LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -373,7 +373,7 @@ class DXRLightningModule(LightningModule):
         volume_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-            n_views=[1, 1, 1] * batchsz,)
+            n_views=[1, 1, 1] * batchsz, is_training=False)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
         # volume_dx_inverse = self.forward_volume(
         #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
@@ -440,7 +440,7 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0)
             tensorboard.add_image(f"validation_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
@@ -449,8 +449,8 @@ class DXRLightningModule(LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 
@@ -465,7 +465,7 @@ class DXRLightningModule(LightningModule):
         figure_xr_hidden = image2d
 
         # Reconstruct the Encoder-Decoder
-        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden)
+        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden, is_training=False)
         psnr = self.psnr(volume_ct_hidden, image3d)
         ssim = self.ssim(volume_ct_hidden, image3d)
         self.psnr_outputs.append(psnr)

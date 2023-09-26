@@ -5,7 +5,7 @@ warnings.filterwarnings("ignore")
 import resource
 
 rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
-print(rlimit)
+# print(rlimit)
 resource.setrlimit(resource.RLIMIT_NOFILE, (65536, rlimit[1]))
 
 import torch
@@ -27,6 +27,9 @@ from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
+from generative.losses import PatchAdversarialLoss, PerceptualLoss
+from generative.networks.nets import MultiScalePatchDiscriminator
 
 from argparse import ArgumentParser
 
@@ -70,7 +73,7 @@ class DXRLightningModule(LightningModule):
         self.lr = hparams.lr
 
         self.ckpt = hparams.ckpt
-        self.lpips = hparams.lpips
+        self.gan = hparams.gan
         self.strict = hparams.strict
         self.img_shape = hparams.img_shape
         self.vol_shape = hparams.vol_shape
@@ -80,6 +83,7 @@ class DXRLightningModule(LightningModule):
         self.delta = hparams.delta
         self.theta = hparams.theta
         self.omega = hparams.omega
+        self.lamda = hparams.lamda
         self.timesteps = hparams.timesteps
 
         self.logsdir = hparams.logsdir
@@ -111,7 +115,8 @@ class DXRLightningModule(LightningModule):
             fov_depth=self.fov_depth, 
             sh=self.sh, 
             pe=self.pe, 
-            backbone=self.backbone,
+            backbone=self.backbone, 
+            fwd_renderer=self.fwd_renderer,
         )
 
         if self.ckpt:
@@ -122,32 +127,78 @@ class DXRLightningModule(LightningModule):
         self.train_step_outputs = []
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
-        if self.lpips:
-            self.lpips_ = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
-
-        self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
+        
+        if self.gan:
+            self.automatic_optimization = False
+            self.discriminator = MultiScalePatchDiscriminator(
+                num_d=2,
+                num_layers_d=3,
+                spatial_dims=2,
+                num_channels=32,
+                in_channels=1,
+                out_channels=8,
+                activation="LEAKYRELU",
+                minimum_size_im=self.img_shape,
+                norm="INSTANCE",
+                kernel_size=3, 
+                dropout=0.2
+            )
+            self.adv_loss = PatchAdversarialLoss(reduction="sum", criterion="hinge")
+            # self.p2d_loss = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
+        self.p2d_loss = PerceptualLoss(
+            spatial_dims=2, 
+            network_type="radimagenet_resnet50", 
+            is_fake_3d=False, 
+            pretrained=True
+        )
+        self.p3d_loss = PerceptualLoss(
+            spatial_dims=3, 
+            network_type="radimagenet_resnet50", 
+            is_fake_3d=True, fake_3d_ratio=0.125,
+            pretrained=True
+        )
+            
+        self.psnr = PeakSignalNoiseRatio(data_range=(0, 1))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 1))
         self.psnr_outputs = []
         self.ssim_outputs = []
-        
+    
+    def feat_loss(self, input_features_disc_fake, input_features_disc_real, lambda_feat=0.1):
+        num_D = len(input_features_disc_fake)
+        GAN_Feat_loss = torch.zeros(1).to(input_features_disc_fake[0][0].device)
+        for i in range(num_D):  # for each discriminator
+            num_intermediate_outputs = len(input_features_disc_fake[i])
+            for j in range(num_intermediate_outputs):  # for each layer output
+                unweighted_loss = self.l1loss(input_features_disc_fake[i][j], input_features_disc_real[i][j].detach())
+                GAN_Feat_loss += unweighted_loss * lambda_feat / num_D
+        return GAN_Feat_loss
+
     def forward_screen(self, image3d, cameras):
-        screen = self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) 
-        screen = screen * 2.0 - 1.0
+        screen = self.fwd_renderer(image3d, cameras) 
+        screen = screen
         return screen
 
-    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None):
+    def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results = self.inv_renderer(image2d, cameras, n_views, resample).view(-1, 1, self.vol_shape, self.vol_shape, self.vol_shape)
+        # results = self.inv_renderer(image2d, cameras, n_views, resample)
+        results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
+        
+        if is_training:
+            return results, middles
         return results
+        
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        pass
+
+    def training_step(self, batch, batch_idx, optimizer_idx=None):
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
-
+        
         # Construct the random cameras, -1 and 1 are the same point in azimuths
         dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
         elev_random = torch.rand_like(dist_random) - 0.5
@@ -164,12 +215,23 @@ class DXRLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
 
+        # train generator
         # Reconstruct the Encoder-Decoder
-        volume_dx_inverse = self.forward_volume(
+        volume_dx_inverse, \
+        middle_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-            n_views=[1, 1, 1] * batchsz,)
+            n_views=[1, 1, 1] * batchsz,
+            is_training=True)
+        
+        # volume_dx_inverse = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+        #     n_views=[1, 1, 1] * batchsz,
+        #     is_training=True)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+        (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
+        
         # volume_dx_inverse = self.forward_volume(
         #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
         #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
@@ -196,20 +258,20 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        if self.lpips:
-            figure_xr_hidden_inverse_random = torch.nan_to_num(figure_xr_hidden_inverse_random, 0, 1, -1)
-            lpips_loss = self.lpips_(figure_xr_hidden_inverse_random.repeat(1, 3, 1, 1).clamp(-1, 1), figure_ct_random.repeat(1, 3, 1, 1).clamp(-1, 1),)
-            self.log(f"{stage}_lpip_loss", lpips_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
-            im2d_loss_inv += lpips_loss
-
-        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
+                      + self.l1loss(volume_ct_random_inverse, image3d) \
+                      + self.l1loss(middle_ct_hidden_inverse, image3d) \
+                      + self.l1loss(middle_ct_random_inverse, image3d)
+        
+        # im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
+        #               + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
 
         # Log the final losses
-        self.log(f"{stage}_im2d_loss", im2d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
-        self.log(f"{stage}_im3d_loss", im3d_loss, on_step=(stage == "train"), prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
+        self.log(f"train_im2d_loss", im2d_loss, on_step=True, prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
+        self.log(f"train_im3d_loss", im3d_loss, on_step=True, prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
 
         # Visualization step
         if batch_idx == 0:
@@ -241,25 +303,122 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
-            tensorboard.add_image(f"{stage}_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
-
-        loss = self.alpha * im3d_loss + self.gamma * im2d_loss
-        return loss
-
-    def training_step(self, batch, batch_idx, optimizer_idx=None):
-        loss = self._common_step(batch, batch_idx, optimizer_idx, stage="train")
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0) 
+            tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
+        
+        
+        # loss_feat = self.feat_loss(features_fakes, features_reals, 1)
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
+                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
+                      
+        loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
         self.train_step_outputs.append(loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss = self._common_step(batch, batch_idx, optimizer_idx=-1, stage="validation")
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
+        _device = batch["image3d"].device
+        batchsz = image2d.shape[0]
+        
+        # Construct the random cameras, -1 and 1 are the same point in azimuths
+        dist_random = 6.0 * torch.ones(self.batch_size, device=_device)
+        elev_random = torch.rand_like(dist_random) - 0.5
+        azim_random = torch.rand_like(dist_random) * 2 - 1  # [0 1) to [-1 1)
+        view_random = make_cameras_dea(dist_random, elev_random, azim_random, fov=18, znear=4, zfar=8)
+
+        dist_hidden = 6.0 * torch.ones(self.batch_size, device=_device)
+        elev_hidden = torch.zeros(self.batch_size, device=_device)
+        azim_hidden = torch.zeros(self.batch_size, device=_device)
+        view_hidden = make_cameras_dea(dist_hidden, elev_hidden, azim_hidden, fov=18, znear=4, zfar=8)
+        
+        # Construct the samples in 2D
+        figure_xr_hidden = image2d
+        figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
+        figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
+
+        # Reconstruct the Encoder-Decoder
+        volume_dx_inverse = self.forward_volume(
+            image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
+            cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
+            n_views=[1, 1, 1] * batchsz, is_training=False)
+        (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+        # volume_dx_inverse = self.forward_volume(
+        #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
+        #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
+        #     n_views=[1, 1] * batchsz,)
+        # (volume_xr_hidden_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+
+        figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
+        figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
+        figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
+        figure_ct_random_inverse_hidden = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_hidden)
+        figure_ct_hidden_inverse_random = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_random)
+        figure_ct_hidden_inverse_hidden = self.forward_screen(image3d=volume_ct_hidden_inverse, cameras=view_hidden)
+
+        if self.sh > 0:
+            volume_xr_hidden_inverse = volume_xr_hidden_inverse.sum(dim=1, keepdim=True)
+            volume_ct_random_inverse = volume_ct_random_inverse.sum(dim=1, keepdim=True)
+            volume_ct_hidden_inverse = volume_ct_hidden_inverse.sum(dim=1, keepdim=True)
+
+        im2d_loss_inv = (
+            self.l1loss(figure_xr_hidden_inverse_hidden, figure_xr_hidden)
+            + self.l1loss(figure_ct_random_inverse_random, figure_ct_random)
+            + self.l1loss(figure_ct_random_inverse_hidden, figure_ct_hidden)
+            + self.l1loss(figure_ct_hidden_inverse_random, figure_ct_random) * self.omega
+            + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
+        )
+
+        im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) + self.l1loss(volume_ct_random_inverse, image3d)
+
+        im2d_loss = im2d_loss_inv
+        im3d_loss = im3d_loss_inv
+
+        # Log the final losses
+        self.log(f"validation_im2d_loss", im2d_loss, on_step=False, prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
+        self.log(f"validation_im3d_loss", im3d_loss, on_step=False, prog_bar=True, logger=True, sync_dist=True, batch_size=self.batch_size,)
+
+        # Visualization step
+        if batch_idx == 0:
+            zeros = torch.zeros_like(image2d)
+            viz2d = torch.cat([
+                torch.cat([
+                    image2d, 
+                    volume_xr_hidden_inverse[..., self.vol_shape // 2, :], 
+                    figure_xr_hidden_inverse_random, 
+                    figure_xr_hidden_inverse_hidden, 
+                    image3d[..., self.vol_shape // 2, :], 
+                    figure_ct_random, 
+                    figure_ct_hidden,
+                ], dim=-2,).transpose(2, 3),
+                torch.cat([
+                    zeros,
+                    # zeros,
+                    # zeros,
+                    # zeros,
+                    # volume_xr_sample_hidden[..., self.vol_shape // 2, :],
+                    # figure_xr_sample_hidden_random,
+                    # figure_xr_sample_hidden_hidden,
+                    volume_ct_random_inverse[..., self.vol_shape // 2, :],
+                    figure_ct_random_inverse_random,
+                    figure_ct_random_inverse_hidden,
+                    volume_ct_hidden_inverse[..., self.vol_shape // 2, :],
+                    figure_ct_hidden_inverse_random,
+                    figure_ct_hidden_inverse_hidden,
+                ], dim=-2,).transpose(2, 3),
+            ], dim=-2,)
+            tensorboard = self.logger.experiment
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0)
+            tensorboard.add_image(f"validation_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
+        
+        
+        loss = self.alpha * im3d_loss + self.gamma * im2d_loss
         self.validation_step_outputs.append(loss)
         return loss
 
     def test_step(self, batch, batch_idx):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 
@@ -274,7 +433,7 @@ class DXRLightningModule(LightningModule):
         figure_xr_hidden = image2d
 
         # Reconstruct the Encoder-Decoder
-        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden)
+        volume_ct_hidden = self.forward_volume(image2d=figure_ct_hidden, is_training=False)
         psnr = self.psnr(volume_ct_hidden, image3d)
         ssim = self.ssim(volume_ct_hidden, image3d)
         self.psnr_outputs.append(psnr)
@@ -332,7 +491,7 @@ if __name__ == "__main__":
     parser.add_argument("--timesteps", type=int, default=180, help="timesteps for diffusion")
     parser.add_argument("--amp", action="store_true", help="train with mixed precision or not")
     parser.add_argument("--test", action="store_true", help="train with mixed precision or not")
-    parser.add_argument("--lpips", action="store_true", help="train with lpips xray ct random")
+    parser.add_argument("--gan", action="store_true", help="train with gan xray ct random")
     parser.add_argument("--strict", action="store_true", help="checkpoint loading")
 
     parser.add_argument("--alpha", type=float, default=1.0, help="vol loss")
@@ -340,12 +499,13 @@ if __name__ == "__main__":
     parser.add_argument("--delta", type=float, default=1.0, help="vgg loss")
     parser.add_argument("--theta", type=float, default=1.0, help="cam loss")
     parser.add_argument("--omega", type=float, default=1.0, help="cam cond")
+    parser.add_argument("--lamda", type=float, default=0.1, help="perc loss")
 
     parser.add_argument("--lr", type=float, default=1e-3, help="adam: learning rate")
     parser.add_argument("--ckpt", type=str, default=None, help="path to checkpoint")
     parser.add_argument("--logsdir", type=str, default="logs", help="logging directory")
     parser.add_argument("--datadir", type=str, default="data", help="data directory")
-    parser.add_argument("--strategy", type=str, default="auto", help="training strategy")
+    parser.add_argument("--strategy", type=str, default="ddp_find_unused_parameters_true", help="training strategy")
     parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
     parser.add_argument("--prediction_type", type=str, default="sample", help="prediction_type for network",)
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
@@ -377,8 +537,8 @@ if __name__ == "__main__":
         lr_callback,
         checkpoint_callback,
     ]
-    if hparams.strategy != "fsdp":
-        callbacks.append(swa_callback)
+    # if hparams.strategy != "gan":
+    #     callbacks.append(swa_callback)
     # Init model with callbacks
     trainer = Trainer(
         accelerator=hparams.accelerator,
@@ -386,7 +546,7 @@ if __name__ == "__main__":
         max_epochs=hparams.epochs,
         logger=[tensorboard_logger],
         callbacks=callbacks,
-        accumulate_grad_batches=4,
+        # accumulate_grad_batches=4,
         strategy=hparams.strategy,  # "auto", #"ddp_find_unused_parameters_true",
         precision=16 if hparams.amp else 32,
         profiler="advanced",

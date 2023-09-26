@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from monai.networks.nets import Unet
 from monai.networks.layers import Reshape
 from monai.networks.layers.factories import Norm
+from monai.networks.layers import MedianFilter, median_filter
 
 from monai.transforms import RandRotate90
 
@@ -65,6 +66,23 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             with_conditioning=True,
             cross_attention_dim=12,  # flatR | flatT
         )
+        
+        self.density_net = nn.Sequential(
+            # MedianFilter([1, 1, 1]),
+            Unet(
+                spatial_dims=3, 
+                in_channels=1 + (2 * 3 * self.pe), 
+                out_channels=1, 
+                channels=backbones[backbone], 
+                strides=(2, 2, 2, 2, 2), 
+                num_res_units=2, 
+                kernel_size=3, 
+                up_kernel_size=3, 
+                act=("LeakyReLU", {"inplace": True}),  
+                norm=Norm.INSTANCE_NVFUSER, 
+                dropout=0.5,
+            ),
+        )
 
     def get_ray_points(self, cameras=None, viewers=None, vol_shape=(1, 256, 256, 256), shape=256):
         B = cameras.R.shape[0]
@@ -108,10 +126,12 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
+        clarity = median_filter(clarity, kernel_size=(3, 3, 3), spatial_dims=3)
+        density = self.density_net(clarity)
         if resample:
             # New methods
             points_3d = self.get_ray_points(cameras=cameras, viewers=self.fwd_renderer)
-            points_features = clarity.view(B, -1, 1).float() # B DHW 1
+            points_features = density.view(B, -1, 1).float() # B DHW 1
             volume_densities = torch.zeros((B, 1, self.vol_shape, self.vol_shape, self.vol_shape), device=_device)
             volume_features = torch.zeros((B, 1, self.vol_shape, self.vol_shape, self.vol_shape), device=_device)
             grid_sizes = torch.tensor([self.vol_shape, self.vol_shape, self.vol_shape], dtype=torch.int64, device=_device).expand(B, 3)
@@ -131,20 +151,20 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
                 splat,
             )
             
-            values = volume_features_.to(clarity.dtype)
+            values = volume_features_.to(density.dtype)
             scenes = torch.split(values, split_size_or_sections=n_views, dim=0)  # 31SHW = [21SHW, 11SHW]
             interp = []
             for scene_, n_view in zip(scenes, n_views):
                 value_ = scene_.mean(dim=0, keepdim=True)
                 interp.append(value_)
 
-            volumes = torch.cat(interp, dim=0)
+            output = torch.cat(interp, dim=0)
         else:
-            volumes = F.interpolate(
+            output = F.interpolate(
                 density, 
                 size=[self.vol_shape, self.vol_shape, self.vol_shape],
                 mode="trilinear"
             )
-            
-        return volumes
+        
+        return output, clarity
         
