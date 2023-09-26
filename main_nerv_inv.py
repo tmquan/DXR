@@ -151,12 +151,12 @@ class DXRLightningModule(LightningModule):
             is_fake_3d=False, 
             pretrained=True
         )
-        self.p3d_loss = PerceptualLoss(
-            spatial_dims=3, 
-            network_type="radimagenet_resnet50", 
-            is_fake_3d=True, fake_3d_ratio=0.125,
-            pretrained=True
-        )
+        # self.p3d_loss = PerceptualLoss(
+        #     spatial_dims=3, 
+        #     network_type="radimagenet_resnet50", 
+        #     is_fake_3d=True, fake_3d_ratio=0.125,
+        #     pretrained=True
+        # )
             
         self.psnr = PeakSignalNoiseRatio(data_range=(0, 1))
         self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 1))
@@ -308,10 +308,12 @@ class DXRLightningModule(LightningModule):
         
         
         # loss_feat = self.feat_loss(features_fakes, features_reals, 1)
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                  + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
+        # loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
+                #   + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
                       
-        loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
+        # loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
+        loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+        
         self.train_step_outputs.append(loss)
         return loss
 
