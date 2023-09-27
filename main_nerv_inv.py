@@ -158,14 +158,14 @@ class DXRLightningModule(LightningModule):
         #     pretrained=True
         # )
             
-        self.psnr = PeakSignalNoiseRatio(data_range=(0, 1))
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 1))
+        self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
         self.psnr_outputs = []
         self.ssim_outputs = []
     
     def forward_screen(self, image3d, cameras):
-        screen = self.fwd_renderer(image3d, cameras) 
-        screen = screen
+        screen = self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) 
+        screen = screen * 2.0 - 1.0
         return screen
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
@@ -179,8 +179,8 @@ class DXRLightningModule(LightningModule):
         pass
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
-        image3d = batch["image3d"]
-        image2d = batch["image2d"]
+        image3d = batch["image3d"] * 2.0 - 1.0
+        image2d = batch["image2d"] * 2.0 - 1.0
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -267,19 +267,19 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0) 
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5 
             tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random)               
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random*0.5+0.5, figure_ct_random*0.5+0.5)               
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
         
         self.train_step_outputs.append(loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        image3d = batch["image3d"]
-        image2d = batch["image2d"]
+        image3d = batch["image3d"] * 2.0 - 1.0
+        image2d = batch["image2d"] * 2.0 - 1.0
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -365,7 +365,7 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0)
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
             tensorboard.add_image(f"validation_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
@@ -374,8 +374,8 @@ class DXRLightningModule(LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
-        image3d = batch["image3d"]
-        image2d = batch["image2d"]
+        image3d = batch["image3d"] * 2.0 - 1.0
+        image2d = batch["image2d"] * 2.0 - 1.0
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 

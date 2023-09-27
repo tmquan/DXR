@@ -29,7 +29,7 @@ backbones = {
     "efficientnet-b7": (32, 48, 80, 224, 640),
     "efficientnet-b8": (32, 56, 88, 248, 704),
     "efficientnet-l2": (72, 104, 176, 480, 1376),
-    "vgg-19": (64, 128, 256, 512, 1024),
+    "vgg-19": (64, 160, 320, 480, 512),
 }
 
 class NeRVFrontToBackInverseRenderer(nn.Module):
