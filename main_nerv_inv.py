@@ -163,16 +163,6 @@ class DXRLightningModule(LightningModule):
         self.psnr_outputs = []
         self.ssim_outputs = []
     
-    def feat_loss(self, input_features_disc_fake, input_features_disc_real, lambda_feat=0.1):
-        num_D = len(input_features_disc_fake)
-        GAN_Feat_loss = torch.zeros(1).to(input_features_disc_fake[0][0].device)
-        for i in range(num_D):  # for each discriminator
-            num_intermediate_outputs = len(input_features_disc_fake[i])
-            for j in range(num_intermediate_outputs):  # for each layer output
-                unweighted_loss = self.l1loss(input_features_disc_fake[i][j], input_features_disc_real[i][j].detach())
-                GAN_Feat_loss += unweighted_loss * lambda_feat / num_D
-        return GAN_Feat_loss
-
     def forward_screen(self, image3d, cameras):
         screen = self.fwd_renderer(image3d, cameras) 
         screen = screen
@@ -182,13 +172,8 @@ class DXRLightningModule(LightningModule):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        # results = self.inv_renderer(image2d, cameras, n_views, resample)
-        results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
-        
-        if is_training:
-            return results, middles
+        results = self.inv_renderer(image2d, cameras, n_views, resample)
         return results
-        
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         pass
@@ -215,29 +200,13 @@ class DXRLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
 
-        # train generator
-        # Reconstruct the Encoder-Decoder
-        volume_dx_inverse, \
-        middle_dx_inverse = self.forward_volume(
+        volume_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1] * batchsz,
             is_training=True)
-        
-        # volume_dx_inverse = self.forward_volume(
-        #     image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
-        #     cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
-        #     n_views=[1, 1, 1] * batchsz,
-        #     is_training=True)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
-        (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
         
-        # volume_dx_inverse = self.forward_volume(
-        #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
-        #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
-        #     n_views=[1, 1] * batchsz,)
-        # (volume_xr_hidden_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
-
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
         figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
@@ -259,12 +228,7 @@ class DXRLightningModule(LightningModule):
         )
 
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
-                      + self.l1loss(volume_ct_random_inverse, image3d) \
-                      + self.l1loss(middle_ct_hidden_inverse, image3d) \
-                      + self.l1loss(middle_ct_random_inverse, image3d)
-        
-        # im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
-        #               + self.l1loss(volume_ct_random_inverse, image3d)
+                      + self.l1loss(volume_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -307,12 +271,8 @@ class DXRLightningModule(LightningModule):
             tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
-        # loss_feat = self.feat_loss(features_fakes, features_reals, 1)
-        # loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random) \
-                #   + self.p3d_loss(volume_xr_hidden_inverse, image3d) \
-                      
-        # loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
-        loss = self.alpha * im3d_loss + self.gamma * im2d_loss
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random)               
+        loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
         
         self.train_step_outputs.append(loss)
         return loss
@@ -345,12 +305,7 @@ class DXRLightningModule(LightningModule):
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1] * batchsz, is_training=False)
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
-        # volume_dx_inverse = self.forward_volume(
-        #     image2d=torch.cat([figure_xr_hidden, figure_ct_hidden]), 
-        #     cameras=join_cameras_as_batch([view_hidden, view_hidden]), 
-        #     n_views=[1, 1] * batchsz,)
-        # (volume_xr_hidden_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
-
+        
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
         figure_ct_random_inverse_random = self.forward_screen(image3d=volume_ct_random_inverse, cameras=view_random)
@@ -508,7 +463,7 @@ if __name__ == "__main__":
     parser.add_argument("--logsdir", type=str, default="logs", help="logging directory")
     parser.add_argument("--datadir", type=str, default="data", help="data directory")
     parser.add_argument("--strategy", type=str, default="ddp_find_unused_parameters_true", help="training strategy")
-    parser.add_argument("--backbone", type=str, default="efficientnet-b7", help="Backbone for network")
+    parser.add_argument("--backbone", type=str, default="vgg-19", help="Backbone for network")
     parser.add_argument("--prediction_type", type=str, default="sample", help="prediction_type for network",)
     parser.add_argument("--weight_decay", type=float, default=1e-4, help="Weight decay")
 
