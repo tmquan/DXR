@@ -161,8 +161,8 @@ class DXRLightningModule(LightningModule):
         if is_training:
             # Define the list of filters
             filters = [
-                MedianFilter(kernel_size=5), 
-                BilateralFilter(kernel_size=5, spatial_sigma=5, color_sigma=0.5, fast_approx=True),
+                MedianFilter(radius=[1, 1, 1]), 
+                # BilateralFilter(spatial_sigma=5, color_sigma=0.5, fast_approx=True),
                 nn.Identity(),
             ]
             results, middles = [random.choice(filters)(tensor) for tensor in (results, middles)]
