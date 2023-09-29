@@ -1,4 +1,5 @@
 import os
+import random
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -15,7 +16,7 @@ import torchvision
 
 torch.set_float32_matmul_precision("high")
 
-from typing import Optional, NamedTuple
+from typing import Optional
 from lightning_fabric.utilities.seed import seed_everything
 from lightning import Trainer, LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -23,13 +24,12 @@ from lightning.pytorch.callbacks import LearningRateMonitor
 from lightning.pytorch.callbacks import StochasticWeightAveraging
 from lightning.pytorch.loggers import TensorBoardLogger
 
-from torchmetrics.image import MultiScaleStructuralSimilarityIndexMeasure
+from monai.networks.layers import MedianFilter, BilateralFilter 
+
 from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image import StructuralSimilarityIndexMeasure
-from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
-from generative.losses import PatchAdversarialLoss, PerceptualLoss
-from generative.networks.nets import MultiScalePatchDiscriminator
+from generative.losses import PerceptualLoss
 
 from argparse import ArgumentParser
 
@@ -58,7 +58,15 @@ backbones = {
 }
 
 
-def make_cameras_dea(dist: torch.Tensor, elev: torch.Tensor, azim: torch.Tensor, fov: int = 10, znear: int = 18.0, zfar: int = 22.0, is_orthogonal: bool = False):
+def make_cameras_dea(
+    dist: torch.Tensor, 
+    elev: torch.Tensor, 
+    azim: torch.Tensor, 
+    fov: int = 10, 
+    znear: int = 18.0, 
+    zfar: int = 22.0, 
+    is_orthogonal: bool = False
+):
     assert dist.device == elev.device == azim.device
     _device = dist.device
     R, T = look_at_view_transform(dist=dist.float(), elev=elev.float() * 90, azim=azim.float() * 180)
@@ -128,59 +136,46 @@ class DXRLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
         
-        if self.gan:
-            self.automatic_optimization = False
-            self.discriminator = MultiScalePatchDiscriminator(
-                num_d=2,
-                num_layers_d=3,
-                spatial_dims=2,
-                num_channels=32,
-                in_channels=1,
-                out_channels=8,
-                activation="LEAKYRELU",
-                minimum_size_im=self.img_shape,
-                norm="INSTANCE",
-                kernel_size=3, 
-                dropout=0.2
-            )
-            self.adv_loss = PatchAdversarialLoss(reduction="sum", criterion="hinge")
-            # self.p2d_loss = LearnedPerceptualImagePatchSimilarity(net_type="vgg")
         self.p2d_loss = PerceptualLoss(
             spatial_dims=2, 
             network_type="radimagenet_resnet50", 
             is_fake_3d=False, 
             pretrained=True
         )
-        # self.p3d_loss = PerceptualLoss(
-        #     spatial_dims=3, 
-        #     network_type="radimagenet_resnet50", 
-        #     is_fake_3d=True, fake_3d_ratio=0.125,
-        #     pretrained=True
-        # )
             
-        self.psnr = PeakSignalNoiseRatio(data_range=(-1, 1))
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=(-1, 1))
+        self.psnr = PeakSignalNoiseRatio(data_range=(0, 1))
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=(0, 1))
         self.psnr_outputs = []
         self.ssim_outputs = []
     
     def forward_screen(self, image3d, cameras):
-        screen = self.fwd_renderer(image3d * 0.5 + 0.5 / image3d.shape[1], cameras) 
-        screen = screen * 2.0 - 1.0
+        screen = self.fwd_renderer(image3d, cameras) 
         return screen
 
     def forward_volume(self, image2d, cameras, n_views=[2, 1], resample=False, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
         assert B == sum(n_views)  # batch must be equal to number of projections
-        results = self.inv_renderer(image2d, cameras, n_views, resample)
+        results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
+        
+        if is_training:
+            # Define the list of filters
+            filters = [
+                MedianFilter(kernel_size=5), 
+                BilateralFilter(kernel_size=5, spatial_sigma=5, color_sigma=0.5, fast_approx=True),
+                nn.Identity(),
+            ]
+            results, middles = [random.choice(filters)(tensor) for tensor in (results, middles)]
+            return results, middles
         return results
+        
 
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
         pass
 
     def training_step(self, batch, batch_idx, optimizer_idx=None):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -200,12 +195,17 @@ class DXRLightningModule(LightningModule):
         figure_ct_random = self.forward_screen(image3d=image3d, cameras=view_random)
         figure_ct_hidden = self.forward_screen(image3d=image3d, cameras=view_hidden)
 
-        volume_dx_inverse = self.forward_volume(
+        # train generator
+        # Reconstruct the Encoder-Decoder
+        volume_dx_inverse, \
+        middle_dx_inverse = self.forward_volume(
             image2d=torch.cat([figure_xr_hidden, figure_ct_random, figure_ct_hidden]), 
             cameras=join_cameras_as_batch([view_hidden, view_random, view_hidden]), 
             n_views=[1, 1, 1] * batchsz,
             is_training=True)
+        
         (volume_xr_hidden_inverse, volume_ct_random_inverse, volume_ct_hidden_inverse,) = torch.split(volume_dx_inverse, batchsz)
+        (middle_xr_hidden_inverse, middle_ct_random_inverse, middle_ct_hidden_inverse,) = torch.split(middle_dx_inverse, batchsz)
         
         figure_xr_hidden_inverse_random = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_random)
         figure_xr_hidden_inverse_hidden = self.forward_screen(image3d=volume_xr_hidden_inverse, cameras=view_hidden)
@@ -228,7 +228,9 @@ class DXRLightningModule(LightningModule):
         )
 
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
-                      + self.l1loss(volume_ct_random_inverse, image3d)
+                      + self.l1loss(volume_ct_random_inverse, image3d) \
+                      + self.l1loss(middle_ct_hidden_inverse, image3d) \
+                      + self.l1loss(middle_ct_random_inverse, image3d)
 
         im2d_loss = im2d_loss_inv
         im3d_loss = im3d_loss_inv
@@ -267,19 +269,18 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5 
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0)  
             tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
+        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random)     
         
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random*0.5+0.5, figure_ct_random*0.5+0.5)               
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
-        
         self.train_step_outputs.append(loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
         
@@ -365,7 +366,7 @@ class DXRLightningModule(LightningModule):
                 ], dim=-2,).transpose(2, 3),
             ], dim=-2,)
             tensorboard = self.logger.experiment
-            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(-1.0, 1.0) * 0.5 + 0.5
+            grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0) 
             tensorboard.add_image(f"validation_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
         
@@ -374,8 +375,8 @@ class DXRLightningModule(LightningModule):
         return loss
 
     def test_step(self, batch, batch_idx):
-        image3d = batch["image3d"] * 2.0 - 1.0
-        image2d = batch["image2d"] * 2.0 - 1.0
+        image3d = batch["image3d"]
+        image2d = batch["image2d"]
         _device = batch["image3d"].device
         batchsz = image2d.shape[0]
 
@@ -494,8 +495,8 @@ if __name__ == "__main__":
         lr_callback,
         checkpoint_callback,
     ]
-    # if hparams.strategy != "gan":
-    #     callbacks.append(swa_callback)
+    if hparams.strategy != "gan":
+        callbacks.append(swa_callback)
     # Init model with callbacks
     trainer = Trainer(
         accelerator=hparams.accelerator,
@@ -503,7 +504,7 @@ if __name__ == "__main__":
         max_epochs=hparams.epochs,
         logger=[tensorboard_logger],
         callbacks=callbacks,
-        # accumulate_grad_batches=4,
+        accumulate_grad_batches=4,
         strategy=hparams.strategy,  # "auto", #"ddp_find_unused_parameters_true",
         precision=16 if hparams.amp else 32,
         profiler="advanced",

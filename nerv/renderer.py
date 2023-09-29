@@ -4,19 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from monai.networks.nets import Unet
-from monai.networks.layers import Reshape
 from monai.networks.layers.factories import Norm
-from monai.networks.layers import MedianFilter, median_filter
 
-from monai.transforms import RandRotate90
-
-from generative.inferers import DiffusionInferer
 from generative.networks.nets import DiffusionModelUNet
-
-from pytorch3d.ops.points_to_volumes import _points_to_volumes
-from pytorch3d.renderer.implicit.utils import ray_bundle_to_ray_points
-from pytorch3d.renderer import VolumeRenderer, NDCMultinomialRaysampler, EmissionAbsorptionRaymarcher
-from pytorch3d.structures import Pointclouds, Volumes, Meshes
 
 backbones = {
     "efficientnet-b0": (16, 24, 40, 112, 320),
@@ -29,7 +19,7 @@ backbones = {
     "efficientnet-b7": (32, 48, 80, 224, 640),
     "efficientnet-b8": (32, 56, 88, 248, 704),
     "efficientnet-l2": (72, 104, 176, 480, 1376),
-    "vgg-19": (64, 160, 320, 480, 512),
+    "vgg-19": (32, 64, 128, 256, 512),
 }
 
 class NeRVFrontToBackInverseRenderer(nn.Module):
@@ -68,6 +58,22 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             cross_attention_dim=12,  # flatR | flatT
         )
         
+        self.density_net = nn.Sequential(
+            Unet(
+                spatial_dims=3, 
+                in_channels=1, 
+                out_channels=1, 
+                channels=backbones[backbone], 
+                strides=(2, 2, 2, 2, 2), 
+                num_res_units=2, 
+                kernel_size=3, 
+                up_kernel_size=3, 
+                act=("LeakyReLU", {"inplace": True}), 
+                norm=Norm.INSTANCE, 
+                dropout=0.5
+            )
+        )
+        
     def forward(self, image2d, cameras, n_views=[2, 1], resample=True, timesteps=None, is_training=False):
         _device = image2d.device
         B = image2d.shape[0]
@@ -89,5 +95,6 @@ class NeRVFrontToBackInverseRenderer(nn.Module):
             timesteps=timesteps,
         ).view(-1, 1, self.fov_depth, self.img_shape, self.img_shape)
 
-        return clarity
+        density = self.density_net(clarity)
+        return density, clarity
         
