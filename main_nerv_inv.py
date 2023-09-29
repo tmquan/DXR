@@ -136,7 +136,7 @@ class DXRLightningModule(LightningModule):
         self.validation_step_outputs = []
         self.l1loss = nn.L1Loss(reduction="mean")
         
-        self.p2d_loss = PerceptualLoss(
+        self.piloss = PerceptualLoss(
             spatial_dims=2, 
             network_type="radimagenet_resnet50", 
             is_fake_3d=False, 
@@ -272,7 +272,7 @@ class DXRLightningModule(LightningModule):
             grid2d = torchvision.utils.make_grid(viz2d, normalize=False, scale_each=False, nrow=1, padding=0).clamp(0.0, 1.0)  
             tensorboard.add_image(f"train_df_samples", grid2d, self.current_epoch * self.batch_size + batch_idx,)
         
-        loss_perc = self.p2d_loss(figure_xr_hidden_inverse_random, figure_ct_random)     
+        loss_perc = self.piloss(figure_xr_hidden_inverse_random, figure_ct_random)     
         
         loss = self.alpha * im3d_loss + self.gamma * im2d_loss + self.lamda * loss_perc
         self.train_step_outputs.append(loss)
