@@ -159,13 +159,13 @@ class DXRLightningModule(LightningModule):
         results, middles = self.inv_renderer(image2d, cameras, n_views, resample)
         
         if is_training:
-            # Define the list of filters
-            filters = [
-                MedianFilter(radius=[1, 1, 1]), 
-                # BilateralFilter(spatial_sigma=5, color_sigma=0.5, fast_approx=True),
-                nn.Identity(),
-            ]
-            results, middles = [random.choice(filters)(tensor) for tensor in (results, middles)]
+            # # Define the list of filters
+            # filters = [
+            #     MedianFilter(radius=[1, 1, 1]), 
+            #     # BilateralFilter(spatial_sigma=5, color_sigma=0.5, fast_approx=True),
+            #     nn.Identity(),
+            # ]
+            # results, middles = [random.choice(filters)(tensor) for tensor in (results, middles)]
             return results, middles
         return results
         
