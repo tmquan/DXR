@@ -192,7 +192,7 @@ class DXRLightningModule(LightningModule):
         if timesteps is None:
             timesteps = torch.zeros((B,), device=_device).long()
         viewpts = torch.cat([cameras.R.reshape(B, 1, -1), cameras.T.reshape(B, 1, -1),], dim=-1,)
-        results = self.unet2d_model(x=image2d, context=viewpts, timesteps=timesteps,)
+        results = self.unet2d_model(x=image2d * 2.0 - 1.0, context=viewpts, timesteps=timesteps,) * 0.5 + 0.5
         return results
     
     def _common_step(self, batch, batch_idx, optimizer_idx, stage: Optional[str] = "evaluation"):
@@ -244,7 +244,8 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_inverse_hidden, figure_ct_hidden) * self.omega
         )
 
-        perc_loss_inv = self.piloss(figure_xr_hidden_inverse_random, figure_ct_random) 
+        perc_loss_inv = self.piloss(figure_xr_hidden_inverse_random.clamp(0.0, 1.0), 
+                                    figure_ct_random.clamp(0.0, 1.0) ) 
         im3d_loss_inv = self.l1loss(volume_ct_hidden_inverse, image3d) \
                       + self.l1loss(volume_ct_random_inverse, image3d)
 
@@ -252,12 +253,12 @@ class DXRLightningModule(LightningModule):
         # Diffusion step: 2 kinds of blending
         timesteps = torch.randint(0, self.inferer.scheduler.num_train_timesteps, (batchsz,), device=_device).long()  # 3 views
 
-        volume_xr_latent = torch.rand_like(image3d)
+        volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
         figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
         # figure_xr_latent_hidden = torch.randn_like(image2d)
         figure_xr_interp_hidden = self.ddpmsch.add_noise(original_samples=image2d, noise=figure_xr_latent_hidden, timesteps=timesteps)
 
-        volume_ct_latent = torch.rand_like(image3d)
+        volume_ct_latent = torch.randn_like(image3d) * 0.5 + 0.5
         figure_ct_latent_random = self.forward_screen(image3d=volume_ct_latent, cameras=view_random)
         figure_ct_latent_hidden = self.forward_screen(image3d=volume_ct_latent, cameras=view_hidden)
 
@@ -313,7 +314,8 @@ class DXRLightningModule(LightningModule):
             + self.l1loss(figure_ct_hidden_output_hidden, figure_ct_target_hidden)
         )
 
-        perc_loss_dif = self.piloss(figure_xr_hidden_output_random, figure_ct_random) 
+        perc_loss_dif = self.piloss(figure_xr_hidden_output_random.clamp(0.0, 1.0), 
+                                    figure_ct_random.clamp(0.0, 1.0)) 
         im3d_loss_dif = self.l1loss(volume_ct_hidden_output, volume_ct_target) 
 
         im2d_loss = im2d_loss_inv + im2d_loss_dif
@@ -332,7 +334,7 @@ class DXRLightningModule(LightningModule):
         if batch_idx == 0:
             # Sampling step for X-ray
             with torch.no_grad():
-                volume_xr_latent = torch.rand_like(image3d)
+                volume_xr_latent = torch.randn_like(image3d) * 0.5 + 0.5
                 figure_xr_latent_hidden = self.forward_screen(image3d=volume_xr_latent, cameras=view_hidden)
                 figure_xr_sample_hidden = self.inferer.sample(input_noise=figure_xr_latent_hidden, 
                                                               diffusion_model=self.unet2d_model, 

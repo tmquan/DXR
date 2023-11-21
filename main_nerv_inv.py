@@ -81,7 +81,6 @@ class DXRLightningModule(LightningModule):
         self.lr = hparams.lr
 
         self.ckpt = hparams.ckpt
-        self.gan = hparams.gan
         self.strict = hparams.strict
         self.img_shape = hparams.img_shape
         self.vol_shape = hparams.vol_shape
